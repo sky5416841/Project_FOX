@@ -140,11 +140,12 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fox_sandb
 
 
 def save_state() -> None:
-    """將 virtual_balance 與 virtual_positions 寫入 JSON 存檔（靜默執行）。"""
+    """將虛擬沙盒狀態寫入 JSON 存檔（靜默執行）。"""
     try:
         payload = {
-            "virtual_balance":   st.session_state.virtual_balance,
-            "virtual_positions": st.session_state.virtual_positions,
+            "virtual_balance":     st.session_state.virtual_balance,
+            "virtual_positions":   st.session_state.virtual_positions,
+            "virtual_history_log": st.session_state.get("virtual_history_log", []),
         }
         with open(STATE_FILE, "w", encoding="utf-8") as _f:
             json.dump(payload, _f, ensure_ascii=False, indent=2)
@@ -154,28 +155,31 @@ def save_state() -> None:
 
 # ── Session state init ────────────────────────────────────────────────────────
 # 嘗試從存檔讀取虛擬沙盒狀態（跨重整保留記憶）
-_persisted_balance:   float      = 100_000.0
-_persisted_positions: list       = []
+_persisted_balance:   float = 100_000.0
+_persisted_positions: list  = []
+_persisted_history:   list  = []
 if "virtual_balance" not in st.session_state:   # 只在冷啟動時讀取一次
     try:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, "r", encoding="utf-8") as _f:
                 _saved = json.load(_f)
-            _persisted_balance   = float(_saved.get("virtual_balance", 100_000.0))
-            _persisted_positions = list(_saved.get("virtual_positions", []))
+            _persisted_balance   = float(_saved.get("virtual_balance",     100_000.0))
+            _persisted_positions = list(_saved.get("virtual_positions",     []))
+            _persisted_history   = list(_saved.get("virtual_history_log",   []))
     except Exception:
         pass  # 讀取失敗 → 沿用預設值，不中斷啟動
 
 defaults = {
-    "price_history":     [],
-    "alerted":           set(),
-    "alert_active":      False,
-    "alert_msg":         "",
-    "prev_price":        None,
+    "price_history":       [],
+    "alerted":             set(),
+    "alert_active":        False,
+    "alert_msg":           "",
+    "prev_price":          None,
     # ── 虛擬量化沙盒（優先從存檔恢復）─────────────────────────────────────
-    "virtual_balance":   _persisted_balance,    # 恢復餘額（或初始 10 萬 U）
-    "virtual_positions": _persisted_positions,  # 恢復持倉列表
-    "agent_log":         [],                    # AI 決策日誌 list[str]，最新在前
+    "virtual_balance":     _persisted_balance,    # 恢復餘額（或初始 10 萬 U）
+    "virtual_positions":   _persisted_positions,  # 恢復持倉列表
+    "virtual_history_log": _persisted_history,    # 手動平倉歷史紀錄
+    "agent_log":           [],                    # AI 決策日誌 list[str]，最新在前
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -992,7 +996,8 @@ def frag_brain() -> None:
                     '🟡 狙擊引擎待機中，等待符合條件的 RSI / 爆量信號…</div>', unsafe_allow_html=True)
     else:
         for _e in _log[:12]:
-            _dc = ("#9B59B6" if "協議 Delta" in _e else
+            _dc = ("#FF8C00" if "手動平倉" in _e else
+                   "#9B59B6" if "協議 Delta" in _e else
                    "#00C2FF" if "做多" in _e else
                    "#FF4B4B" if "做空" in _e else "#5B7494")
             st.markdown(f'<div style="border-left:3px solid {_dc};padding:0.35rem 0.7rem;'
@@ -1077,18 +1082,21 @@ def frag_virtual_positions() -> None:
             "浮動盈虧 (USDT)": st.column_config.TextColumn("浮動盈虧 (USDT)", width="medium"),
         })
 
-    # ── 歷史績效 (Closed) ─────────────────────────────────────────────────
+    # ── 歷史績效 (Closed) — 合併 AI 自動平倉 + 手動覆蓋平倉 ───────────────
     st.markdown("<div style='margin-top:0.8rem'></div>", unsafe_allow_html=True)
     st.markdown('<div class="section-header">🏁 歷史績效 (Closed)</div>', unsafe_allow_html=True)
     _CLOSED_COLS = ["Symbol", "方向", "開倉均價", "平倉價格", "數量", "已實現盈虧 (USDT)", "開倉時間", "平倉時間"]
-    if not _closed:
+    # 合併：AI 自動平倉（virtual_positions Closed）+ 手動覆蓋（virtual_history_log）
+    _manual_closed = st.session_state.get("virtual_history_log", [])
+    _all_closed    = _closed + _manual_closed
+    if not _all_closed:
         st.dataframe(pd.DataFrame(columns=_CLOSED_COLS), use_container_width=True, hide_index=True)
     else:
         _crows = []
-        for _vp in reversed(_closed):     # 最新平倉在上
-            _e   = float(_vp.get("entry_price", 0))
-            _cp  = float(_vp.get("closed_price", _e))
-            _q   = float(_vp.get("qty", 0))
+        for _vp in reversed(_all_closed):
+            _e    = float(_vp.get("entry_price", 0))
+            _cp   = float(_vp.get("closed_price", _e))
+            _q    = float(_vp.get("qty", 0))
             _rpnl = float(_vp.get("realized_pnl", 0))
             _crows.append({
                 "Symbol":            _vp.get("symbol", ""),
@@ -1098,7 +1106,7 @@ def frag_virtual_positions() -> None:
                 "數量":              _q,
                 "已實現盈虧 (USDT)": f"{_rpnl:+,.4f}",
                 "開倉時間":          _vp.get("opened_at", "—"),
-                "平倉時間":          _vp.get("closed_at", "—"),
+                "平倉時間":          _vp.get("closed_at", "—"),  # 手動平倉含 🛑 標記
             })
         st.dataframe(pd.DataFrame(_crows), use_container_width=True, hide_index=True, column_config={
             "Symbol":            st.column_config.TextColumn("Symbol",              width="small"),
@@ -1139,6 +1147,86 @@ with _tab3:
     frag_real_positions()   # 真實持倉表 (10s)
     st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
     frag_virtual_positions() # 虛擬持倉紀錄 Open + Closed (5s)
+
+    # ── 緊急手動覆蓋平倉（直接渲染，不入 fragment，避免 run_every 重置 selectbox）
+    st.markdown("<div style='margin-top:1rem'></div>", unsafe_allow_html=True)
+    with st.expander("🔴 緊急手動平倉 (Manual Override)", expanded=False):
+        _mo_open = [p for p in st.session_state.virtual_positions
+                    if p.get("status", "Open") == "Open"]
+        if not _mo_open:
+            st.info("✅ 目前沒有任何 Open 倉位，無需手動介入。")
+        else:
+            st.markdown(
+                "<div style='font-size:0.78rem;color:#FF8C00;margin-bottom:0.6rem'>"
+                "⚠️ 此操作將以最後已知標記價格強制平倉，無法撤銷。</div>",
+                unsafe_allow_html=True,
+            )
+            _mo_symbols = [p["symbol"] for p in _mo_open]
+            _mo_col1, _mo_col2 = st.columns([3, 1])
+            with _mo_col1:
+                _mo_sel = st.selectbox(
+                    "選擇強制結算幣種", _mo_symbols, key="manual_override_sym"
+                )
+            with _mo_col2:
+                st.markdown("<div style='margin-top:1.75rem'></div>", unsafe_allow_html=True)
+                _mo_fire = st.button(
+                    "⚡ 執行強制結算", type="primary", use_container_width=True
+                )
+
+            if _mo_fire and _mo_sel:
+                _mo_target = next(
+                    (p for p in _mo_open if p["symbol"] == _mo_sel), None
+                )
+                if _mo_target:
+                    _mo_ts  = datetime.now().strftime("%H:%M:%S")
+                    _mo_e   = float(_mo_target.get("entry_price", 0))
+                    _mo_m   = float(_mo_target.get("mark_price", _mo_e))  # 最後已知標記價
+                    _mo_q   = float(_mo_target.get("qty", 0))
+                    _mo_s   = _mo_target.get("side", "Long")
+                    _mo_mg  = float(_mo_target.get("margin", SNIPER_MARGIN_DEFAULT))
+
+                    # ── 結算損益 ──────────────────────────────────────────────
+                    _mo_pnl = ((_mo_m - _mo_e) * _mo_q if _mo_s == "Long"
+                               else (_mo_e - _mo_m) * _mo_q)
+                    _mo_pnl = round(_mo_pnl, 4)
+
+                    # ── 平倉手續費 ────────────────────────────────────────────
+                    _mo_fee = round(_mo_q * _mo_m * CLOSE_FEE_RATE, 4)
+
+                    # ── 歸還帳戶（保證金 + PNL - 手續費）────────────────────
+                    _mo_returned = _mo_mg + _mo_pnl - _mo_fee
+                    st.session_state.virtual_balance += max(_mo_returned, 0.0)
+
+                    # ── 移入 virtual_history_log（🛑 標記）────────────────────
+                    st.session_state.virtual_history_log.insert(0, {
+                        **_mo_target,
+                        "status":       "Closed",
+                        "closed_at":    f"🛑 [手動平倉] {_mo_ts}",
+                        "closed_price": _mo_m,
+                        "realized_pnl": _mo_pnl,
+                        "close_fee":    _mo_fee,
+                    })
+
+                    # ── 從 virtual_positions 刪除 Open 倉位 ───────────────────
+                    st.session_state.virtual_positions = [
+                        p for p in st.session_state.virtual_positions
+                        if not (p["symbol"] == _mo_sel
+                                and p.get("status", "Open") == "Open")
+                    ]
+
+                    # ── AI 決策日誌 ───────────────────────────────────────────
+                    _mo_sign = "+" if _mo_pnl >= 0 else ""
+                    st.session_state.agent_log.insert(0,
+                        f"[{_mo_ts}]　🛑 [手動平倉] **{_mo_sel}** "
+                        f"指揮官手動覆蓋強制結算，PNL：{_mo_sign}{_mo_pnl:,.2f} USDT"
+                        f"　平倉手續費 -${_mo_fee:,.2f}"
+                    )
+                    st.session_state.agent_log = \
+                        st.session_state.agent_log[:AGENT_LOG_MAX]
+
+                    # ── 存檔 + 全頁刷新 ───────────────────────────────────────
+                    save_state()
+                    st.rerun()
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────
 st.markdown("---")

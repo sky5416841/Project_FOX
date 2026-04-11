@@ -390,6 +390,8 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
             if vol_surge is None or pd.isna(rsi):
                 continue
 
+            # 取倒數第二根（最後一根已完整收盤的 K 線）供 Protocol Delta 分析
+            _lc       = ohlcv[-2]
             price_str = f"{last_price:,.2f}" if last_price >= 10 else f"{last_price:,.4f}"
             rows.append({
                 "Symbol":          sym_base,
@@ -397,6 +399,11 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
                 "價格 (USDT)":     price_str,
                 "RSI 15m":         rsi,
                 "Vol Surge (%)":   vol_surge,
+                # ── 最後已收盤 K 線結構（供協議 Delta 刺客邏輯使用）──────────
+                "ohlc_o":          float(_lc[1]),   # Open
+                "ohlc_h":          float(_lc[2]),   # High
+                "ohlc_l":          float(_lc[3]),   # Low
+                "ohlc_c":          float(_lc[4]),   # Close
             })
 
         return (pd.DataFrame(rows) if rows else pd.DataFrame()), None
@@ -423,6 +430,10 @@ OPEN_FEE_RATE          = 0.0005    # 開倉手續費率 (0.05%)
 CLOSE_FEE_RATE         = 0.0005    # 平倉手續費率 (0.05%)
 SLIPPAGE_PCT           = 0.001     # 滑價模擬 0.1%
 LIQUIDATION_THRESHOLD  = 0.95      # 浮虧達保證金 95% → 爆倉
+# ── 協議 Delta：長上影線刺客常數 ─────────────────────────────────────────
+DELTA_WICK_RATIO      = 0.60       # 上影線須佔 K 線總長 60% 以上
+DELTA_TOTAL_MIN_PCT   = 0.02       # K 線總長須 > 收盤價 2%（確保有效波動）
+DELTA_24H_SURGE_BLOCK = 30.0       # 24h 漲幅 > 此值，普通 RSI 做空封鎖
 
 
 def _parse_price(price_str: str) -> float | None:
@@ -474,14 +485,47 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
         if symbol in existing:             # 已有 Open 倉位 → 不加倉
             continue
 
+        # ── 讀取 24h 漲跌幅 ──────────────────────────────────────────────────
+        pct24h = float(row.get("24h 漲跌幅 (%)", 0.0))
+
+        # ── 協議 Delta：長上影線結構計算 ─────────────────────────────────────
+        _o = float(row.get("ohlc_o", 0))
+        _h = float(row.get("ohlc_h", 0))
+        _l = float(row.get("ohlc_l", 0))
+        _c = float(row.get("ohlc_c", 0))
+        protocol_delta = False
+        _delta_wick_pct = 0.0
+        if _h > _l and _c > 0:
+            _upper_wick    = _h - max(_o, _c)
+            _total_len     = _h - _l
+            _delta_wick_pct = round(_upper_wick / _total_len * 100, 1)
+            if (_upper_wick > _total_len * DELTA_WICK_RATIO
+                    and _total_len > _c * DELTA_TOTAL_MIN_PCT):
+                protocol_delta = True
+
         # ── 決策判斷 ─────────────────────────────────────────────────────────
-        side, reason = None, ""
+        side, reason, is_delta = None, "", False
+
         if rsi < SNIPER_RSI_LONG and vol_surge > SNIPER_VOL_MIN:
+            # 恐慌超賣 → 做多（不受 24h 漲幅影響）
             side   = "Long"
             reason = f"恐慌超賣 (RSI {rsi:.1f} < {SNIPER_RSI_LONG}, 爆量 {vol_surge:.0f}%)"
         elif rsi > SNIPER_RSI_SHORT and vol_surge > SNIPER_VOL_MIN:
-            side   = "Short"
-            reason = f"狂熱超買 (RSI {rsi:.1f} > {SNIPER_RSI_SHORT}, 爆量 {vol_surge:.0f}%)"
+            if pct24h <= DELTA_24H_SURGE_BLOCK:
+                # 狂熱超買 → 正常做空（24h 漲幅未觸發保護網）
+                side   = "Short"
+                reason = f"狂熱超買 (RSI {rsi:.1f} > {SNIPER_RSI_SHORT}, 爆量 {vol_surge:.0f}%)"
+            # else: 24h 漲幅 > 30% → 普通 RSI 做空封鎖，等候協議 Delta 覆蓋
+
+        # ── 協議 Delta 特許覆蓋：暴漲後長上影線刺客 ─────────────────────────
+        # 觸發條件：尚無決策 + 24h 漲幅 > 30% + 長上影線見頂訊號
+        if side is None and protocol_delta and pct24h > DELTA_24H_SURGE_BLOCK:
+            side     = "Short"
+            is_delta = True
+            reason   = (
+                f"[協議 Delta] 24h 暴漲 +{pct24h:.1f}% 後"
+                f"出現極端長上影線（上影佔 {_delta_wick_pct:.0f}%），多頭力竭"
+            )
 
         if side is None:
             continue
@@ -500,27 +544,35 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
         st.session_state.virtual_positions.append({
             "symbol":      symbol,
             "side":        side,
-            "entry_price": entry_slipped,   # 已含滑價的成交均價
+            "entry_price": entry_slipped,
             "qty":         qty,
             "mark_price":  price_val,
             "margin":      margin,
             "leverage":    leverage,
             "nominal":     nominal,
             "opened_at":   ts,
-            "hwm":         entry_slipped,   # High Water Mark：初始 = 滑價後開倉價
-            "status":      "Open",          # Open | Closed
+            "hwm":         entry_slipped,
+            "status":      "Open",
+            "is_delta":    is_delta,        # 標記協議 Delta 特許單
         })
-        # 扣除保證金 + 開倉手續費
         st.session_state.virtual_balance -= (margin + open_fee)
         existing.add(symbol)
 
         # ── 寫入決策日誌 ──────────────────────────────────────────────────────
-        action = "做多" if side == "Long" else "做空"
-        log_entry = (
-            f"[{ts}]　🔫 偵測到 **{symbol}** {reason}。"
-            f"已自動市價{action} {leverage}x | 保證金 ${margin:,.0f} | 名目 ${nominal:,.0f} USDT"
-            f"　@ {entry_slipped:,.4f}（含滑價）　Qty {qty:.4f}　手續費 -${open_fee:,.2f}"
-        )
+        if is_delta:
+            log_entry = (
+                f"[{ts}]　🟣 [協議 Delta 觸發] **{symbol}** "
+                f"暴漲後出現極端長上影線，多頭力竭，執行神仙做空狙擊！"
+                f"　{leverage}x | 保證金 ${margin:,.0f} | 名目 ${nominal:,.0f} USDT"
+                f"　@ {entry_slipped:,.4f}　Qty {qty:.4f}　手續費 -${open_fee:,.2f}"
+            )
+        else:
+            action = "做多" if side == "Long" else "做空"
+            log_entry = (
+                f"[{ts}]　🔫 偵測到 **{symbol}** {reason}。"
+                f"已自動市價{action} {leverage}x | 保證金 ${margin:,.0f} | 名目 ${nominal:,.0f} USDT"
+                f"　@ {entry_slipped:,.4f}（含滑價）　Qty {qty:.4f}　手續費 -${open_fee:,.2f}"
+            )
         st.session_state.agent_log.insert(0, log_entry)
 
         # ── 開倉後立刻存檔 ────────────────────────────────────────────────────
@@ -916,7 +968,9 @@ def frag_brain() -> None:
                     '🟡 狙擊引擎待機中，等待符合條件的 RSI / 爆量信號…</div>', unsafe_allow_html=True)
     else:
         for _e in _log[:12]:
-            _dc = "#00C2FF" if "做多" in _e else ("#FF4B4B" if "做空" in _e else "#5B7494")
+            _dc = ("#9B59B6" if "協議 Delta" in _e else
+                   "#00C2FF" if "做多" in _e else
+                   "#FF4B4B" if "做空" in _e else "#5B7494")
             st.markdown(f'<div style="border-left:3px solid {_dc};padding:0.35rem 0.7rem;'
                         f'margin-bottom:0.3rem;font-size:0.72rem;color:#8BA5C5;line-height:1.55">'
                         f'{_e}</div>', unsafe_allow_html=True)

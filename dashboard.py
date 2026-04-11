@@ -1034,23 +1034,34 @@ def frag_virtual_positions() -> None:
         })
 
 # ═════════════════════════════════════════════════════════════════════════════
-# RENDER — 各 Fragment 依序掛載，各自獨立刷新
+# RENDER — 三分頁版面架構
+# 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
+# 無論使用者停在哪個 Tab，session_state 寫入與資料更新均持續進行。
 # ═════════════════════════════════════════════════════════════════════════════
-frag_sandbox()
-st.divider()
-frag_ticker()
-st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
-_col_left, _col_right = st.columns([6, 4])
-with _col_left:
-    frag_chart()
-with _col_right:
-    frag_brain()
-st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
-frag_scanner()
-st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
-frag_real_positions()
-frag_virtual_positions()
+_tab1, _tab2, _tab3 = st.tabs(["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算"])
+
+# ── Tab 1：戰術指揮大廳 ────────────────────────────────────────────────────
+with _tab1:
+    frag_sandbox()          # 虛擬沙盒資產卡 + 引擎心跳 (15s)
+    st.divider()
+    frag_ticker()           # 真實資產卡 + 警報 (5s)
+    st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
+    _col_left, _col_right = st.columns([6, 4])
+    with _col_left:
+        frag_chart()        # BTC 即時走勢圖 (5s)
+    with _col_right:
+        frag_brain()        # 風控大腦 + AI 決策日誌 (10s)
+
+# ── Tab 2：天眼雷達 ────────────────────────────────────────────────────────
+with _tab2:
+    frag_scanner()          # 全網廣域雷達 Top 30 (20s)
+
+# ── Tab 3：持倉與結算 ──────────────────────────────────────────────────────
+with _tab3:
+    frag_real_positions()   # 真實持倉表 (10s)
+    st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
+    frag_virtual_positions() # 虛擬持倉紀錄 Open + Closed (5s)
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────
 st.markdown("---")
-st.caption("Project F.O.X. © 2026 · 僅供參考，非投資建議 · 各區塊獨立刷新（5s / 10s / 15s）")
+st.caption("Project F.O.X. © 2026 · 僅供參考，非投資建議 · 各區塊獨立刷新（5s / 10s / 20s）")

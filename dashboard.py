@@ -278,6 +278,23 @@ def _calc_rsi(closes: list, period: int = 14) -> float:
     return round(100.0 - 100.0 / (1.0 + rs), 1)
 
 
+def _calc_cci(highs: list, lows: list, closes: list, period: int = 14) -> float:
+    """
+    Commodity Channel Index (CCI)，純 Python 實作，無外部 ta 套件。
+    公式：CCI = (TP - SMA_TP) / (0.015 × MeanDev)
+    TP (Typical Price) = (High + Low + Close) / 3
+    """
+    if len(closes) < period:
+        return float("nan")
+    tps      = [(highs[i] + lows[i] + closes[i]) / 3.0
+                for i in range(len(closes) - period, len(closes))]
+    tp_mean  = sum(tps) / period
+    mean_dev = sum(abs(tp - tp_mean) for tp in tps) / period
+    if mean_dev == 0:
+        return 0.0
+    return round((tps[-1] - tp_mean) / (0.015 * mean_dev), 1)
+
+
 # ── 天眼掃描器：終極黑名單（非加密資產完全排除）────────────────────────────
 _SCANNER_BLACKLIST: frozenset[str] = frozenset({
     # 主流大型幣
@@ -378,16 +395,19 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
             # 資料完整性驗證
             if len(ohlcv) < 15:
                 continue
+            highs   = [c[2] for c in ohlcv]
+            lows    = [c[3] for c in ohlcv]
             closes  = [c[4] for c in ohlcv]
             volumes = [c[5] for c in ohlcv]
             if sum(volumes) <= 0 or max(closes) == min(closes):
                 continue
 
             rsi       = _calc_rsi(closes)
+            cci       = _calc_cci(highs, lows, closes)
             avg_prev5 = sum(volumes[-6:-1]) / 5
             vol_surge = round((volumes[-1] / avg_prev5) * 100, 1) if avg_prev5 > 0 else None
 
-            if vol_surge is None or pd.isna(rsi):
+            if vol_surge is None or pd.isna(rsi) or pd.isna(cci):
                 continue
 
             # 取倒數第二根（最後一根已完整收盤的 K 線）供 Protocol Delta 分析
@@ -398,6 +418,7 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
                 "24h 漲跌幅 (%)":  round(pct24h, 2),
                 "價格 (USDT)":     price_str,
                 "RSI 15m":         rsi,
+                "CCI 14":          cci,
                 "Vol Surge (%)":   vol_surge,
                 # ── 最後已收盤 K 線結構（供協議 Delta 刺客邏輯使用）──────────
                 "ohlc_o":          float(_lc[1]),   # Open
@@ -422,18 +443,17 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
 # ─────────────────────────────────────────────────────────────────────────────
 SNIPER_MARGIN_DEFAULT  = 1_000.0   # 單筆保證金預設值 (USDT)，實際由 sidebar 控制
 SNIPER_RSI_LONG        = 30.0      # RSI 低於此值 → 恐慌超賣 → 做多
-SNIPER_RSI_SHORT       = 70.0      # RSI 高於此值 → 狂熱超買 → 做空
-SNIPER_VOL_MIN         = 150.0     # Vol Surge 須超過此值 (%) 才觸發
+SNIPER_CCI_SHORT       = 250.0     # CCI 高於此值 → 極度超買 → 配合 is_pin_bar 做空
+SNIPER_VOL_MIN         = 150.0     # Vol Surge 須超過此值 (%) 才觸發做多
 AGENT_LOG_MAX          = 50        # 日誌最多保留幾條
 TRAILING_STOP_PCT      = 0.05      # 移動停利回撤比例：5%（從最高水位回撤觸發平倉）
 OPEN_FEE_RATE          = 0.0005    # 開倉手續費率 (0.05%)
 CLOSE_FEE_RATE         = 0.0005    # 平倉手續費率 (0.05%)
 SLIPPAGE_PCT           = 0.001     # 滑價模擬 0.1%
 LIQUIDATION_THRESHOLD  = 0.95      # 浮虧達保證金 95% → 爆倉
-# ── 協議 Delta：長上影線刺客常數 ─────────────────────────────────────────
+# ── 協議 Delta：K 線型態刺客常數 ─────────────────────────────────────────
 DELTA_WICK_RATIO      = 0.60       # 上影線須佔 K 線總長 60% 以上
 DELTA_TOTAL_MIN_PCT   = 0.02       # K 線總長須 > 收盤價 2%（確保有效波動）
-DELTA_24H_SURGE_BLOCK = 30.0       # 24h 漲幅 > 此值，普通 RSI 做空封鎖
 
 
 def _parse_price(price_str: str) -> float | None:
@@ -475,57 +495,45 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
 
         symbol    = row.get("Symbol", "")
         rsi       = row.get("RSI 15m")
+        cci       = row.get("CCI 14")
         vol_surge = row.get("Vol Surge (%)")
         price_val = _parse_price(row.get("價格 (USDT)", ""))
 
         if not symbol or price_val is None or price_val <= 0:
             continue
-        if pd.isna(rsi) or pd.isna(vol_surge):
+        if pd.isna(rsi) or pd.isna(vol_surge) or pd.isna(cci):
             continue
-        if symbol in existing:             # 已有 Open 倉位 → 不加倉
+        if symbol in existing:
             continue
 
-        # ── 讀取 24h 漲跌幅 ──────────────────────────────────────────────────
-        pct24h = float(row.get("24h 漲跌幅 (%)", 0.0))
+        rsi = float(rsi)
+        cci = float(cci)
 
-        # ── 協議 Delta：長上影線結構計算 ─────────────────────────────────────
+        # ── 協議 Delta：長上影線 (is_pin_bar) 計算 ───────────────────────────
         _o = float(row.get("ohlc_o", 0))
         _h = float(row.get("ohlc_h", 0))
         _l = float(row.get("ohlc_l", 0))
         _c = float(row.get("ohlc_c", 0))
-        protocol_delta = False
-        _delta_wick_pct = 0.0
+        is_pin_bar  = False
+        _wick_pct   = 0.0
         if _h > _l and _c > 0:
-            _upper_wick    = _h - max(_o, _c)
-            _total_len     = _h - _l
-            _delta_wick_pct = round(_upper_wick / _total_len * 100, 1)
+            _upper_wick = _h - max(_o, _c)
+            _total_len  = _h - _l
+            _wick_pct   = round(_upper_wick / _total_len * 100, 1)
             if (_upper_wick > _total_len * DELTA_WICK_RATIO
                     and _total_len > _c * DELTA_TOTAL_MIN_PCT):
-                protocol_delta = True
+                is_pin_bar = True
 
         # ── 決策判斷 ─────────────────────────────────────────────────────────
-        side, reason, is_delta = None, "", False
+        # Long  : RSI 超賣 (<30) + 爆量 (Vol Surge >150%)
+        # Short : CCI 極度超買 (>250) + 長上影線 (is_pin_bar)
+        #         → 協議 Delta 刺客，無視 24h 漲幅，直接特許做空
+        side = None
 
         if rsi < SNIPER_RSI_LONG and vol_surge > SNIPER_VOL_MIN:
-            # 恐慌超賣 → 做多（不受 24h 漲幅影響）
-            side   = "Long"
-            reason = f"恐慌超賣 (RSI {rsi:.1f} < {SNIPER_RSI_LONG}, 爆量 {vol_surge:.0f}%)"
-        elif rsi > SNIPER_RSI_SHORT and vol_surge > SNIPER_VOL_MIN:
-            if pct24h <= DELTA_24H_SURGE_BLOCK:
-                # 狂熱超買 → 正常做空（24h 漲幅未觸發保護網）
-                side   = "Short"
-                reason = f"狂熱超買 (RSI {rsi:.1f} > {SNIPER_RSI_SHORT}, 爆量 {vol_surge:.0f}%)"
-            # else: 24h 漲幅 > 30% → 普通 RSI 做空封鎖，等候協議 Delta 覆蓋
-
-        # ── 協議 Delta 特許覆蓋：暴漲後長上影線刺客 ─────────────────────────
-        # 觸發條件：尚無決策 + 24h 漲幅 > 30% + 長上影線見頂訊號
-        if side is None and protocol_delta and pct24h > DELTA_24H_SURGE_BLOCK:
-            side     = "Short"
-            is_delta = True
-            reason   = (
-                f"[協議 Delta] 24h 暴漲 +{pct24h:.1f}% 後"
-                f"出現極端長上影線（上影佔 {_delta_wick_pct:.0f}%），多頭力竭"
-            )
+            side = "Long"
+        elif cci > SNIPER_CCI_SHORT and is_pin_bar:
+            side = "Short"
 
         if side is None:
             continue
@@ -534,7 +542,7 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
         entry_slipped = (price_val * (1.0 + SLIPPAGE_PCT) if side == "Long"
                          else price_val * (1.0 - SLIPPAGE_PCT))
 
-        # ── 計算名目價值與開倉手續費（重算，確保與滑價後一致）───────────────
+        # ── 計算名目價值與開倉手續費 ─────────────────────────────────────────
         nominal  = margin * leverage
         qty      = nominal / entry_slipped
         open_fee = nominal * OPEN_FEE_RATE
@@ -553,24 +561,24 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
             "opened_at":   ts,
             "hwm":         entry_slipped,
             "status":      "Open",
-            "is_delta":    is_delta,        # 標記協議 Delta 特許單
         })
         st.session_state.virtual_balance -= (margin + open_fee)
         existing.add(symbol)
 
         # ── 寫入決策日誌 ──────────────────────────────────────────────────────
-        if is_delta:
+        if side == "Short":
             log_entry = (
                 f"[{ts}]　🟣 [協議 Delta 觸發] **{symbol}** "
-                f"暴漲後出現極端長上影線，多頭力竭，執行神仙做空狙擊！"
+                f"CCI 極度超買 ({cci:.0f} > {SNIPER_CCI_SHORT:.0f}) "
+                f"且出現 {_wick_pct:.0f}% 長上影線，主力出貨確認，執行刺客狙擊！"
                 f"　{leverage}x | 保證金 ${margin:,.0f} | 名目 ${nominal:,.0f} USDT"
                 f"　@ {entry_slipped:,.4f}　Qty {qty:.4f}　手續費 -${open_fee:,.2f}"
             )
         else:
-            action = "做多" if side == "Long" else "做空"
             log_entry = (
-                f"[{ts}]　🔫 偵測到 **{symbol}** {reason}。"
-                f"已自動市價{action} {leverage}x | 保證金 ${margin:,.0f} | 名目 ${nominal:,.0f} USDT"
+                f"[{ts}]　🔫 偵測到 **{symbol}** "
+                f"恐慌超賣 (RSI {rsi:.1f} < {SNIPER_RSI_LONG}, 爆量 {vol_surge:.0f}%)。"
+                f"已自動市價做多 {leverage}x | 保證金 ${margin:,.0f} | 名目 ${nominal:,.0f} USDT"
                 f"　@ {entry_slipped:,.4f}（含滑價）　Qty {qty:.4f}　手續費 -${open_fee:,.2f}"
             )
         st.session_state.agent_log.insert(0, log_entry)
@@ -904,34 +912,50 @@ def frag_chart() -> None:
 # ── Fragment 4：全網廣域雷達 (20s) ─────────────────────────────────────────
 @st.fragment(run_every=20)
 def frag_scanner() -> None:
-    with st.expander("🌐 全網廣域雷達　(Top 30 高波動活躍榜 · 兩段式掃描 · 15m RSI)", expanded=True):
+    with st.expander("🌐 全網廣域雷達　(Top 30 高波動活躍榜 · 兩段式掃描 · RSI + CCI 14)", expanded=True):
         _sdf, _serr = fetch_scanner_data()
         if _serr:
             st.error(f"❌ 廣域雷達錯誤：{_serr}")
         elif _sdf.empty:
             st.info("📡 兩段式掃描中，請稍候…（首次載入約需 10–20 秒）")
         else:
+            # 只取 UI 顯示欄位（去除引擎專用 ohlc_* 欄位）
+            _display_cols = ["Symbol", "24h 漲跌幅 (%)", "價格 (USDT)",
+                             "RSI 15m", "CCI 14", "Vol Surge (%)"]
+            _disp = _sdf[[c for c in _display_cols if c in _sdf.columns]]
+
             def _pc(v):
                 if not isinstance(v, (int, float)) or pd.isna(v): return ""
                 return ("color: #00FF88; font-weight: bold" if v > 0 else
                         "color: #FF4B4B; font-weight: bold" if v < 0 else "")
             def _rc(v):
-                if not isinstance(v, float) or pd.isna(v): return ""
+                if not isinstance(v, (int, float)) or pd.isna(v): return ""
                 return ("color: #FF6B35; font-weight: bold" if v > 70 else
                         "color: #00C2FF; font-weight: bold" if v < 30 else "")
+            def _cc(v):
+                # CCI > 250 → 協議 Delta 警戒（紫色）；CCI < -100 → 超賣（藍色）
+                if not isinstance(v, (int, float)) or pd.isna(v): return ""
+                return ("color: #9B59B6; font-weight: bold" if v > 250 else
+                        "color: #00C2FF; font-weight: bold" if v < -100 else "")
             def _vc(v):
                 if not isinstance(v, (int, float)) or pd.isna(v): return ""
                 return "color: #FF6B35; font-weight: bold" if v > 200 else ""
-            _styled = (_sdf.style
+
+            _fmt = {"24h 漲跌幅 (%)": "{:+.2f}%",
+                    "RSI 15m":        "{:.1f}",
+                    "CCI 14":         "{:.0f}",
+                    "Vol Surge (%)":  "{:.1f}%"}
+            _styled = (_disp.style
                        .map(_pc, subset=["24h 漲跌幅 (%)"])
                        .map(_rc, subset=["RSI 15m"])
+                       .map(_cc, subset=["CCI 14"])
                        .map(_vc, subset=["Vol Surge (%)"])
-                       .format({"24h 漲跌幅 (%)": "{:+.2f}%",
-                                "RSI 15m":        "{:.1f}",
-                                "Vol Surge (%)":  "{:.1f}%"}))
+                       .format({k: v for k, v in _fmt.items() if k in _disp.columns}))
             st.dataframe(_styled, use_container_width=True, hide_index=True)
             st.caption(f"掃描時間：{datetime.now().strftime('%H:%M:%S')} · 快取 20 秒 · "
-                       "24h 漲跌幅：🟢 正 / 🔴 負　RSI > 70 🟠 超買　RSI < 30 🔵 超賣　Vol Surge > 200% 🟠 爆量")
+                       "RSI < 30 🔵 超賣　"
+                       "CCI > 250 🟣 協議 Delta 警戒　CCI < -100 🔵 超賣　"
+                       "Vol Surge > 200% 🟠 爆量")
 
 
 # ── Fragment 5：F.O.X. 風控大腦 + AI 決策日誌 (10s) ───────────────────────

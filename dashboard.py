@@ -299,6 +299,29 @@ def _calc_cci(highs: list, lows: list, closes: list, period: int = 14) -> float:
     return round((tps[-1] - tp_mean) / (0.015 * mean_dev), 1)
 
 
+def _calc_atr(highs: list, lows: list, closes: list, period: int = 14) -> float:
+    """
+    Average True Range (ATR)，Wilder Smoothing，純 Python，無外部 ta 套件。
+    TR = max(High-Low, |High-PrevClose|, |Low-PrevClose|)
+    ATR = Wilder MA of TR over `period` bars
+    """
+    if len(closes) < period + 1:
+        return float("nan")
+    trs = []
+    for i in range(1, len(closes)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i]  - closes[i - 1]),
+        )
+        trs.append(tr)
+    # Wilder smoothing：第一個值取簡單平均，之後逐步平滑
+    atr = sum(trs[:period]) / period
+    for i in range(period, len(trs)):
+        atr = (atr * (period - 1) + trs[i]) / period
+    return round(atr, 8)
+
+
 # ── 天眼掃描器：終極黑名單（非加密資產完全排除）────────────────────────────
 _SCANNER_BLACKLIST: frozenset[str] = frozenset({
     # 主流大型幣
@@ -408,6 +431,7 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
 
             rsi       = _calc_rsi(closes)
             cci       = _calc_cci(highs, lows, closes)
+            atr       = _calc_atr(highs, lows, closes)
             avg_prev5 = sum(volumes[-6:-1]) / 5
             vol_surge = round((volumes[-1] / avg_prev5) * 100, 1) if avg_prev5 > 0 else None
 
@@ -424,6 +448,7 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
                 "RSI 15m":         rsi,
                 "CCI 14":          cci,
                 "Vol Surge (%)":   vol_surge,
+                "atr":             atr if not pd.isna(atr) else 0.0,  # ATR(14)，供動態停利使用
                 # ── 最後已收盤 K 線結構（供協議 Delta 刺客邏輯使用）──────────
                 "ohlc_o":          float(_lc[1]),   # Open
                 "ohlc_h":          float(_lc[2]),   # High
@@ -501,6 +526,7 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
         rsi       = row.get("RSI 15m")
         cci       = row.get("CCI 14")
         vol_surge = row.get("Vol Surge (%)")
+        atr_val   = float(row.get("atr", 0.0) or 0.0)   # ATR(14)，0 代表資料不足
         price_val = _parse_price(row.get("價格 (USDT)", ""))
 
         if not symbol or price_val is None or price_val <= 0:
@@ -564,6 +590,7 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
             "nominal":     nominal,
             "opened_at":   ts,
             "hwm":         entry_slipped,
+            "atr":         atr_val,   # 開倉當下的 ATR(14)，驅動動態移動停利
             "status":      "Open",
         })
         st.session_state.virtual_balance -= (margin + open_fee)
@@ -635,16 +662,21 @@ def _run_trailing_stop() -> None:
         side   = vp["side"]
         hwm    = float(vp.get("hwm", entry))
         margin = float(vp.get("margin", SNIPER_MARGIN_DEFAULT))
+        atr    = float(vp.get("atr", 0.0) or 0.0)
+
+        # ── 動態追蹤距離：2 × ATR（絕對價格距離）──────────────────────────
+        # 舊倉位 atr == 0 時降級回固定 5% 保護，確保不報錯
+        trail_dist = (2.0 * atr) if atr > 0 else (entry * TRAILING_STOP_PCT)
 
         # ── 計算當前浮動盈虧 ──────────────────────────────────────────────
         upnl = (mark - entry) * qty if side == "Long" else (entry - mark) * qty
 
-        # ── Step 1：更新最高水位 ───────────────────────────────────────────
+        # ── Step 1：更新最高水位 (HWM / LWM) ─────────────────────────────
         if side == "Long":
             if mark > hwm:
                 vp["hwm"] = mark
                 hwm = mark
-        else:  # Short
+        else:  # Short：hwm 實際上是「最低水位 (LWM)」，追蹤最低點
             if mark < hwm:
                 vp["hwm"] = mark
                 hwm = mark
@@ -652,12 +684,14 @@ def _run_trailing_stop() -> None:
         # ── Step 2：爆倉檢查（優先於移動停利）────────────────────────────
         liquidated = upnl <= -(margin * LIQUIDATION_THRESHOLD)
 
-        # ── Step 3：移動停利檢查 ──────────────────────────────────────────
+        # ── Step 3：ATR 動態移動停利檢查 ─────────────────────────────────
+        # Long  觸發線：HWM - (2 × ATR)
+        # Short 觸發線：LWM + (2 × ATR)
         trailing_triggered = False
         if not liquidated:
-            if side == "Long"  and mark <= hwm * (1.0 - TRAILING_STOP_PCT):
+            if side == "Long"  and mark <= hwm - trail_dist:
                 trailing_triggered = True
-            elif side == "Short" and mark >= hwm * (1.0 + TRAILING_STOP_PCT):
+            elif side == "Short" and mark >= hwm + trail_dist:
                 trailing_triggered = True
 
         if not liquidated and not trailing_triggered:
@@ -687,11 +721,13 @@ def _run_trailing_stop() -> None:
                 f"　平倉手續費 -${close_fee:,.2f}"
             )
         else:
-            icon = "🟢" if pnl >= 0 else "🔴"
-            sign = "+" if pnl >= 0 else ""
+            icon  = "🟢" if pnl >= 0 else "🔴"
+            sign  = "+" if pnl >= 0 else ""
+            atr_label = (f"ATR×2={trail_dist:,.4f}" if atr > 0
+                         else f"固定5%={trail_dist:,.4f}")
             st.session_state.agent_log.insert(0,
                 f"[{ts}]　{icon} [平倉] **{vp['symbol']}** "
-                f"SIREN 觸發移動停利，最終結算：{sign}{pnl:,.2f} USDT"
+                f"ATR 動態停利觸發（{atr_label}），最終結算：{sign}{pnl:,.2f} USDT"
                 f"　平倉手續費 -${close_fee:,.2f}"
             )
 
@@ -762,7 +798,7 @@ def frag_sandbox() -> None:
         "#### 🎮 F.O.X. 虛擬量化沙盒 &nbsp;"
         "<span style='font-size:0.78rem;color:#B8860B;font-weight:500;"
         "background:rgba(255,180,0,0.12);border:1px solid rgba(255,180,0,0.3);"
-        "border-radius:4px;padding:0.15rem 0.5rem'>PAPER TRADING · 移動停利 5%</span>",
+        "border-radius:4px;padding:0.15rem 0.5rem'>PAPER TRADING · ATR 動態停利</span>",
         unsafe_allow_html=True,
     )
     # 只計算 Open 持倉的浮動盈虧
@@ -1053,14 +1089,18 @@ def frag_virtual_positions() -> None:
     else:
         _rows = []
         for _vp in _open:
-            _e = float(_vp.get("entry_price", 0))
-            _q = float(_vp.get("qty", 0))
-            _m = float(_vp.get("mark_price", _e))
-            _s = _vp.get("side", "Long")
-            _h = float(_vp.get("hwm", _e))
-            _p = (_m - _e) * _q if _s == "Long" else (_e - _m) * _q
-            # 觸發線 = HWM × 0.95 (Long) 或 HWM × 1.05 (Short)
-            _trig = _h * (1.0 - TRAILING_STOP_PCT) if _s == "Long" else _h * (1.0 + TRAILING_STOP_PCT)
+            _e    = float(_vp.get("entry_price", 0))
+            _q    = float(_vp.get("qty", 0))
+            _m    = float(_vp.get("mark_price", _e))
+            _s    = _vp.get("side", "Long")
+            _h    = float(_vp.get("hwm", _e))
+            _atr  = float(_vp.get("atr", 0.0) or 0.0)
+            _p    = (_m - _e) * _q if _s == "Long" else (_e - _m) * _q
+            # 觸發線：ATR 動態距離 (2×ATR)；舊倉位 ATR=0 時降級回固定 5%
+            _tdist = (2.0 * _atr) if _atr > 0 else (_h * TRAILING_STOP_PCT)
+            _trig  = _h - _tdist if _s == "Long" else _h + _tdist
+            # 欄位尾綴：顯示是 ATR 動態還是固定 5%（方便識別舊倉位）
+            _trig_label = f"{_trig:,.4f} ({'ATR×2' if _atr > 0 else '固定5%'})"
             _rows.append({
                 "Symbol":          _vp.get("symbol", ""),
                 "方向":            _s,
@@ -1068,7 +1108,7 @@ def frag_virtual_positions() -> None:
                 "數量":            _q,
                 "標記價格":        f"{_m:,.4f}",
                 "最高水位 (HWM)":  f"{_h:,.4f}",
-                "觸發線":          f"{_trig:,.4f}",
+                "觸發線":          _trig_label,
                 "浮動盈虧 (USDT)": f"{_p:+,.4f}",
             })
         st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True, column_config={
@@ -1119,6 +1159,99 @@ def frag_virtual_positions() -> None:
             "平倉時間":          st.column_config.TextColumn("平倉時間",            width="small"),
         })
 
+# ── Fragment 8：CFO 戰情分析室（資金統計 + 淨值曲線）(15s) ─────────────────
+@st.fragment(run_every=15)
+def frag_cfo_room() -> None:
+    st.markdown(
+        "#### 📊 CFO 戰情分析室 &nbsp;"
+        "<span style='font-size:0.78rem;color:#00C2FF;font-weight:500;"
+        "background:rgba(0,194,255,0.10);border:1px solid rgba(0,194,255,0.3);"
+        "border-radius:4px;padding:0.15rem 0.5rem'>Performance Analytics</span>",
+        unsafe_allow_html=True,
+    )
+
+    # ── 合併所有已結算紀錄（AI 自動平倉 + 手動覆蓋平倉）──────────────────
+    _ai_closed     = [p for p in st.session_state.virtual_positions
+                      if p.get("status", "Open") == "Closed"]
+    _manual_closed = st.session_state.get("virtual_history_log", [])
+    _all_closed    = _ai_closed + _manual_closed
+
+    if not _all_closed:
+        st.markdown(
+            '<div style="background:rgba(0,194,255,0.05);border:1px solid rgba(0,194,255,0.2);'
+            'border-radius:8px;padding:1.1rem 1.3rem;font-size:0.82rem;color:#3D7A94">'
+            '📊 戰情室等待數據累積中...</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── 統計四大指標 ──────────────────────────────────────────────────────
+    _total        = len(_all_closed)
+    _pnls         = [float(p.get("realized_pnl", 0.0)) for p in _all_closed]
+    _wins         = sum(1 for x in _pnls if x > 0)
+    _losses       = sum(1 for x in _pnls if x < 0)
+    _win_rate     = (_wins / _total * 100) if _total > 0 else 0.0
+    _net_pnl      = sum(_pnls)
+    _gross_profit = sum(x for x in _pnls if x > 0)
+    _gross_loss   = sum(abs(x) for x in _pnls if x < 0)
+
+    if _gross_loss > 0:
+        _pf_val = _gross_profit / _gross_loss
+        _pf_str = f"{_pf_val:.2f}"
+        _pf_delta = f"獲利 ${_gross_profit:,.2f} / 虧損 ${_gross_loss:,.2f}"
+    else:
+        _pf_str   = "∞" if _gross_profit > 0 else "N/A"
+        _pf_delta = "無虧損紀錄" if _gross_profit > 0 else None
+
+    _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+    _mc1.metric(
+        "📋 總交易筆數",
+        _total,
+        f"{_wins} 勝 / {_losses} 敗",
+    )
+    _mc2.metric(
+        "🎯 勝率 (Win Rate)",
+        f"{_win_rate:.1f}%",
+        f"{_wins} 勝 / {_total} 筆",
+    )
+    _mc3.metric(
+        "💰 總淨利 (Net PnL)",
+        f"${_net_pnl:+,.2f}",
+        f"{(_net_pnl / 100_000.0 * 100):+.2f}% 報酬率",
+    )
+    _mc4.metric(
+        "⚖️ 盈虧比 (Profit Factor)",
+        _pf_str,
+        _pf_delta,
+    )
+
+    # ── 資金淨值曲線 (Equity Curve) ──────────────────────────────────────
+    st.markdown("<div style='margin-top:0.9rem'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📈 資金淨值曲線 (Equity Curve)</div>',
+                unsafe_allow_html=True)
+
+    # 依 closed_at 時間字串排序（手動平倉格式「🛑 [手動平倉] HH:MM:SS」→ 取末段時間）
+    def _sort_key(p: dict) -> str:
+        s = str(p.get("closed_at", ""))
+        return s.split()[-1] if s else "00:00:00"
+
+    _sorted_closed = sorted(_all_closed, key=_sort_key)
+
+    _INITIAL = 100_000.0
+    _equity  = _INITIAL
+    _curve_rows = [{"交易筆次": 0, "資金淨值 (USDT)": _equity}]
+    for _i, _p in enumerate(_sorted_closed, start=1):
+        _equity += float(_p.get("realized_pnl", 0.0))
+        _curve_rows.append({"交易筆次": _i, "資金淨值 (USDT)": round(_equity, 4)})
+
+    _curve_df = pd.DataFrame(_curve_rows).set_index("交易筆次")
+    st.line_chart(_curve_df, use_container_width=True, height=220)
+    st.caption(
+        f"基準：初始資金 $100,000 USDT · 共 {_total} 筆已結算 · "
+        f"最新淨值 ${_equity:,.2f} · 更新：{datetime.now().strftime('%H:%M:%S')}"
+    )
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # RENDER — 三分頁版面架構
 # 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
@@ -1144,7 +1277,9 @@ with _tab2:
 
 # ── Tab 3：持倉與結算 ──────────────────────────────────────────────────────
 with _tab3:
-    frag_real_positions()   # 真實持倉表 (10s)
+    frag_cfo_room()          # CFO 戰情分析室：統計指標 + 淨值曲線 (15s)
+    st.divider()
+    frag_real_positions()    # 真實持倉表 (10s)
     st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
     frag_virtual_positions() # 虛擬持倉紀錄 Open + Closed (5s)
 

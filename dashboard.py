@@ -675,6 +675,13 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
         else:
             dynamic_margin = margin * 0.5     # 勉強及格：縮小試水溫
 
+        # ── 風控硬頂：單筆保證金不得超過帳戶總資金的 10% ────────────────────
+        # 防止極端插針造成爆倉穿倉，從開倉源頭限制最大損失敞口
+        _balance_cap   = st.session_state.virtual_balance * 0.10
+        dynamic_margin = min(dynamic_margin, _balance_cap)
+        if dynamic_margin < 1.0:      # 餘額過低，跳過本次開倉
+            continue
+
         # ── 滑價模擬：做多吃漲、做空吃跌 ────────────────────────────────────
         entry_slipped = (price_val * (1.0 + SLIPPAGE_PCT) if side == "Long"
                          else price_val * (1.0 - SLIPPAGE_PCT))
@@ -879,21 +886,28 @@ def _run_trailing_stop() -> None:
                     f"　平倉手續費 -${close_fee:,.2f}"
                 )
             else:
+                # PNL ≥ 0 → 真正停利；PNL < 0 → ATR 防守線出場但虧損，標記為停損
+                _close_label = "移動停利" if pnl >= 0 else "動態停損"
                 icon  = "🟢" if pnl >= 0 else "🔴"
                 sign  = "+" if pnl >= 0 else ""
                 atr_label = (f"ATR×2={trail_dist:,.4f}" if atr > 0
                              else f"固定5%={trail_dist:,.4f}")
                 st.session_state.agent_log.insert(0,
-                    f"[{ts}]　{icon} [平倉] **{vp['symbol']}** "
-                    f"ATR 動態停利觸發（{atr_label}），最終結算：{sign}{pnl:,.2f} USDT"
+                    f"[{ts}]　{icon} [{_close_label}] **{vp['symbol']}** "
+                    f"ATR 防守線觸發（{atr_label}），最終結算：{sign}{pnl:,.2f} USDT"
                     f"　平倉手續費 -${close_fee:,.2f}"
                 )
 
             # ── 平倉後立刻存檔 ────────────────────────────────────────────
             save_state()
 
-            # ── 寫入 SQLite 持久化交易紀錄 ────────────────────────────────
-            _exit_reason = "爆倉" if liquidated else "移動停利"
+            # ── 寫入 SQLite 持久化交易紀錄（精確區分停利/停損）────────────
+            if liquidated:
+                _exit_reason = "爆倉"
+            elif pnl >= 0:
+                _exit_reason = "移動停利"
+            else:
+                _exit_reason = "動態停損"
             insert_trade(
                 timestamp   = ts,
                 symbol      = vp["symbol"],

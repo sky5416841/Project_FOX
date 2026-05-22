@@ -14,6 +14,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from dotenv import load_dotenv
 from database import init_db, insert_trade
+from ai_copilot import ask_copilot
 # ── 載入 .env（放在所有 st.* 呼叫之前）────────────────────────────────────────
 load_dotenv()
 init_db()   # 初始化 SQLite 持久化資料庫
@@ -182,6 +183,7 @@ defaults = {
     "virtual_positions":   _persisted_positions,  # 恢復持倉列表
     "virtual_history_log": _persisted_history,    # 手動平倉歷史紀錄
     "agent_log":           [],                    # AI 決策日誌 list[str]，最新在前
+    "copilot_history":     [],                    # AI 副駕對話紀錄 list[dict]
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -1498,7 +1500,7 @@ def frag_cfo_room() -> None:
 # 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
 # 無論使用者停在哪個 Tab，session_state 寫入與資料更新均持續進行。
 # ═════════════════════════════════════════════════════════════════════════════
-_tab1, _tab2, _tab3 = st.tabs(["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算"])
+_tab1, _tab2, _tab3, _tab4 = st.tabs(["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕"])
 
 # ── Tab 1：戰術指揮大廳 ────────────────────────────────────────────────────
 with _tab1:
@@ -1615,6 +1617,88 @@ with _tab3:
                     # ── 存檔 + 全頁刷新 ───────────────────────────────────────
                     save_state()
                     st.rerun()
+
+# ── Tab 4：AI 量化副駕 ─────────────────────────────────────────────────────
+with _tab4:
+    st.markdown(
+        "#### 🤖 AI 量化副駕 &nbsp;"
+        "<span style='font-size:0.78rem;color:#5B7494;font-weight:400'>"
+        "代號「狐影」· Text-to-SQL · Powered by Gemini</span>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div style='font-size:0.78rem;color:#5B7494;margin-bottom:0.8rem'>"
+        "直接用中文詢問交易紀錄，副駕自動轉成 SQL 查詢並回傳專業戰報分析。"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── 快捷問題按鈕 ──────────────────────────────────────────────────────
+    st.markdown(
+        "<div style='font-size:0.72rem;color:#5B7494;margin-bottom:0.4rem'>"
+        "💡 快捷詢問</div>",
+        unsafe_allow_html=True,
+    )
+    _preset_questions = [
+        "幫我統計整體勝率和總盈虧",
+        "哪個幣種的總盈虧最高？",
+        "列出所有虧損超過 100 USDT 的交易",
+        "共振評分高於 80 的交易，勝率和平均盈虧如何？",
+        "各平倉原因（停利/爆倉/手動）的次數與總盈虧統計",
+    ]
+    _preset_cols = st.columns(len(_preset_questions))
+    _preset_clicked: str | None = None
+    for _ci, (_col_p, _q) in enumerate(zip(_preset_cols, _preset_questions)):
+        with _col_p:
+            if st.button(_q, key=f"preset_{_ci}", use_container_width=True):
+                _preset_clicked = _q
+
+    st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
+
+    # ── 顯示歷史對話 ──────────────────────────────────────────────────────
+    _chat_container = st.container()
+    with _chat_container:
+        for _msg in st.session_state.copilot_history:
+            with st.chat_message(_msg["role"],
+                                 avatar="🦊" if _msg["role"] == "assistant" else "👤"):
+                st.markdown(_msg["content"])
+
+    # ── 輸入框（快捷按鈕或手動輸入）─────────────────────────────────────
+    _user_input = st.chat_input("詢問你的交易數據，例如：幫我查最近勝率最高的幣種…")
+
+    # 快捷按鈕優先；若同一幀兩者都有，以快捷為主
+    _question = _preset_clicked or _user_input
+
+    if _question:
+        # 把使用者問題加入對話紀錄
+        st.session_state.copilot_history.append({
+            "role":    "user",
+            "content": _question,
+        })
+
+        # 顯示使用者訊息
+        with _chat_container:
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(_question)
+
+        # 呼叫 AI 副駕（帶 spinner 等待提示）
+        with _chat_container:
+            with st.chat_message("assistant", avatar="🦊"):
+                with st.spinner("狐影正在分析資料庫…"):
+                    _answer = ask_copilot(_question)
+                st.markdown(_answer)
+
+        # 把 AI 回應加入對話紀錄
+        st.session_state.copilot_history.append({
+            "role":    "assistant",
+            "content": _answer,
+        })
+
+    # ── 清除對話按鈕 ──────────────────────────────────────────────────────
+    if st.session_state.copilot_history:
+        if st.button("🗑️ 清除對話紀錄", key="copilot_clear"):
+            st.session_state.copilot_history = []
+            st.rerun()
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────
 st.markdown("---")

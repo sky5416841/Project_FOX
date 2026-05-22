@@ -1650,7 +1650,7 @@ with _tab4:
     _preset_clicked: str | None = None
     for _ci, (_col_p, _q) in enumerate(zip(_preset_cols, _preset_questions)):
         with _col_p:
-            if st.button(_q, key=f"preset_{_ci}", use_container_width=True):
+            if st.button(_q, key=f"preset_{_ci}", width="stretch"):
                 _preset_clicked = _q
 
     st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)

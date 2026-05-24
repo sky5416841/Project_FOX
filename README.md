@@ -37,7 +37,8 @@ Project F.O.X. 並非單純的價格提醒工具，而是一套**具備完整交
 ```
 Project_FOX/
 │
-├── dashboard.py          # 主控制台（Streamlit，~1,900 行）
+├── dashboard.py          # 主控制台（Streamlit，~1,950 行）
+│   ├── Cookie 保持登入（HMAC-SHA256 簽名，7 天有效）
 │   ├── 登入攔截牆（Login Wall）— 未登入完全封鎖主面板
 │   ├── 多幣種雷達選擇器（BTC / ETH / ADA，可即時切換）
 │   ├── 完全體 K 線圖（Candlestick + MA7/MA25 + 成交量副圖）
@@ -83,6 +84,7 @@ Project_FOX/
 | **資料處理** | Pandas 2.0+ | OHLCV DataFrame、MA 計算、掃描器管線 |
 | **持久化** | SQLite3（stdlib）| users 資料表 + trade_history，多使用者隔離 |
 | **身份驗證** | hashlib + hmac（stdlib）| PBKDF2-HMAC-SHA256 密碼加密，constant-time 比對 |
+| **持久登入** | streamlit-cookies-controller | HMAC-SHA256 簽名 Cookie，7 天免登入，降級防呆 |
 | **AI 副駕** | Google Gemini 2.0 Flash | Text-to-SQL + 繁體中文戰報生成 |
 | **狀態管理** | JSON + Session State | 使用者專屬沙盒，跨重整恢復 |
 | **配置管理** | python-dotenv | API 金鑰環境隔離 |
@@ -95,9 +97,16 @@ Project_FOX/
 ### 4.1 多使用者 SaaS 架構
 
 ```
+Cookie 保持登入（Persistent Login）
+  ├─ Token 格式：{user_id}:{username}:{expiry_unix}:{hmac_sha256_sig}
+  ├─ 有效期：7 天（max_age=604800），登出時立即清除
+  ├─ 簽名金鑰：COOKIE_SECRET 環境變數；未設定時自動從現有金鑰派生
+  ├─ 降級防呆：套件未安裝時靜默降級，使用者仍可手動登入
+  └─ 刷新流程：F5 → 讀 Cookie → HMAC 驗簽 + expiry 驗證 → 還原 session
+
 登入攔截牆 (Login Wall)
   └─ st.session_state.logged_in == False → st.stop() 封鎖全部主面板
-  └─ 登入成功 → session_state 記錄 user_id / username
+  └─ 登入成功 → session_state 記錄 user_id / username → 寫入 Cookie
 
 使用者資料隔離
   ├─ 沙盒存檔：fox_sandbox_state_{user_id}.json（各使用者獨立）
@@ -277,6 +286,7 @@ Step 3：仍取不到的倉位 → price_error=True，UI 顯示 ⚠️ 警告
 | **即時快照層** | JSON（使用者專屬）| 虛擬餘額 / 所有持倉狀態 | 每次平倉後立即寫入 |
 | **歷史歸檔層** | SQLite `trade_history` | 完整交易紀錄（含共振評分）| 每次平倉（含手動覆蓋）寫入 |
 | **身份認證層** | SQLite `users` | 帳號 + 密碼雜湊 | 註冊時寫入，登入時驗證 |
+| **瀏覽器 Cookie** | HMAC-SHA256 Token | 登入狀態（user_id / username）| 登入時寫入，登出時清除 |
 
 ---
 
@@ -339,6 +349,12 @@ API_SECRET=your_binance_api_secret
 # Gemini API（選用：不填則 AI 副駕「狐影」離線）
 # 免費申請：https://aistudio.google.com/apikey
 GEMINI_API_KEY=your_gemini_api_key
+
+# Cookie 簽名金鑰（選用：不填時自動從上方金鑰派生，生產環境建議自行設定）
+# COOKIE_SECRET=your_random_secret_string
+
+# 管理員帳號預設密碼（選用：首次啟動時自動建立 admin 帳號）
+# ADMIN_DEFAULT_PWD=your_admin_password
 ```
 
 ### 啟動主控台
@@ -390,16 +406,17 @@ CREATE TABLE trade_history (
 
 ```
 requirements.txt
-├── ccxt>=4.3.0              # 交易所統一接口，支援 100+ 交易所
-├── streamlit>=1.35.0        # 即時 Web UI 框架
-├── pandas>=2.0.0            # 高效能 DataFrame 管線
-├── plotly>=5.0.0            # 互動式金融圖表（含 make_subplots）
-├── python-dotenv>=1.0.0     # 環境變數安全管理
-└── google-genai             # Gemini API（AI 副駕「狐影」）
+├── ccxt>=4.3.0                          # 交易所統一接口，支援 100+ 交易所
+├── streamlit>=1.35.0                    # 即時 Web UI 框架
+├── pandas>=2.0.0                        # 高效能 DataFrame 管線
+├── plotly>=5.0.0                        # 互動式金融圖表（含 make_subplots）
+├── python-dotenv>=1.0.0                 # 環境變數安全管理
+├── google-genai>=1.0.0                  # Gemini API（AI 副駕「狐影」）
+└── streamlit-cookies-controller>=0.4.0  # 瀏覽器 Cookie 管理（保持登入）
 ```
 
 **標準庫使用**（零額外安裝成本）：
-`sqlite3` / `hashlib` / `hmac` / `json` / `os` / `re` / `time` / `datetime` / `ctypes` / `collections.deque`
+`sqlite3` / `hashlib` / `hmac` / `secrets` / `json` / `os` / `re` / `time` / `datetime` / `ctypes` / `collections.deque`
 
 ---
 
@@ -439,8 +456,8 @@ requirements.txt
 │                    └───────────────────┘                       │
 │                                                                 │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │                  多使用者登入攔截牆                          │  │
-│  │        PBKDF2-SHA256 密碼加密 · user_id 資料隔離           │  │
+│  │          多使用者登入攔截牆 + Cookie 保持登入              │  │
+│  │  PBKDF2-SHA256 加密 · HMAC Cookie 7天 · user_id 隔離     │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                 │
 │  ┌───────────────────────────────────────────────────────────┐  │
@@ -464,6 +481,7 @@ requirements.txt
 | Phase 6 | 多帳號 SaaS 架構：users 資料表、PBKDF2 密碼加密、登入防護牆、per-user 沙盒隔離 |
 | Phase 7 | 多幣種雷達（BTC/ETH/ADA 即時切換）、幣種同步警報線與走勢快取 |
 | Phase 8 | K 線圖完全體升級：Candlestick + MA7/MA25 雙均線 + 成交量副圖（make_subplots）|
+| Phase 9 | Cookie 保持登入：HMAC-SHA256 簽名 Token、7 天有效期、自動還原 session、登出清除 |
 
 ---
 

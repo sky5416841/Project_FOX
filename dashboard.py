@@ -288,7 +288,7 @@ def fetch_ohlcv_data(symbol: str, timeframe: str, limit: int = 100) -> tuple[pd.
         if not raw:
             return pd.DataFrame(), f"取不到 {symbol} {timeframe} K 線資料"
         df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms") + pd.Timedelta(hours=8)
         return df, None
     except ccxt.RateLimitExceeded as e:
         return pd.DataFrame(), f"Binance Rate Limit 觸發：{e}"

@@ -1212,7 +1212,7 @@ def frag_ticker() -> None:
         if _price < _pf:
             if "floor" not in st.session_state.alerted:
                 st.session_state.alert_active = True
-                st.session_state.alert_msg    = f"價格跌破 {_pf:,.0f} USDT！現價：{_price:,.2f}"
+                st.session_state.alert_msg    = f"價格跌破 {_pf:g} USDT！現價：{_price:g}"
                 st.session_state.alerted.add("floor"); beep()
         else:
             st.session_state.alerted.discard("floor")
@@ -1225,7 +1225,7 @@ def frag_ticker() -> None:
                     _k = f"drop_{int(_nt // HISTORY_WINDOW_SEC)}"
                     if _k not in st.session_state.alerted:
                         st.session_state.alert_active = True
-                        st.session_state.alert_msg    = f"1 分鐘急跌 {_dp:.2f}%！{_op:,.2f} → {_price:,.2f}"
+                        st.session_state.alert_msg    = f"1 分鐘急跌 {_dp:.2f}%！{_op:g} → {_price:g}"
                         st.session_state.alerted.add(_k); beep()
 
     if st.session_state.alert_active:

@@ -23,6 +23,7 @@ _SCHEMA_DESCRIPTION = """
 
 欄位清單：
   id           INTEGER   主鍵，自增
+  user_id      INTEGER   所屬使用者 ID（查詢時必須依此過濾，確保數據隔離）
   timestamp    TEXT      平倉時間 HH:MM:SS（當日累積，無跨日日期欄位）
   symbol       TEXT      幣種代號，例如 SOL、BNB、DOGE（不含 /USDT:USDT 後綴）
   side         TEXT      方向：'Long' 或 'Short'
@@ -40,7 +41,7 @@ _SCHEMA_DESCRIPTION = """
 只允許 SELECT；禁止 INSERT / UPDATE / DELETE / DROP / CREATE / ALTER。
 """.strip()
 
-_SQL_SYSTEM_PROMPT = f"""{_SCHEMA_DESCRIPTION}
+_SQL_SYSTEM_PROMPT_BASE = f"""{_SCHEMA_DESCRIPTION}
 
 任務：將使用者的自然語言問題轉換為一條可執行的 SQLite SELECT 語句。
 
@@ -51,6 +52,7 @@ _SQL_SYSTEM_PROMPT = f"""{_SCHEMA_DESCRIPTION}
 4. LIKE 匹配時幣種代號一律大寫。
 5. 問「最近」或「今天」時，掃描全表（無日期欄可篩選）。
 6. 計算勝率時使用：ROUND(100.0 * SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) / COUNT(*), 2)
+7. 所有查詢都必須加上 WHERE user_id = {{USER_ID}} 條件（或多條件時 AND user_id = {{USER_ID}}），禁止查詢其他 user_id 的資料。
 """
 
 _SUMMARY_SYSTEM_PROMPT = f"""{_SCHEMA_DESCRIPTION}
@@ -151,30 +153,27 @@ def _execute_sql(sql: str) -> tuple[list[dict[str, Any]], str | None]:
         return [], f"資料庫執行異常：{e}"
 
 
-def ask_copilot(user_question: str) -> str:
+def ask_copilot(user_question: str, user_id: int = 0) -> str:
     """
     Text-to-SQL AI 副駕主函式。
 
     流程：
-      1. 呼叫 Gemini 將自然語言翻譯成 SQL
+      1. 呼叫 Gemini 將自然語言翻譯成 SQL（含 user_id 過濾）
       2. 安全性驗證
       3. 執行 SQL（失敗時帶錯誤訊息重試一次）
       4. 呼叫 Gemini 將結果整理成繁體中文戰報
-
-    Args:
-        user_question: 使用者輸入的自然語言問題
-
-    Returns:
-        str: AI 副駕的繁體中文回應
     """
     try:
         client = _get_gemini_client()
     except ValueError as e:
         return f"⚠️ **AI 副駕離線**\n\n{e}"
 
+    # 動態注入 user_id 到 SQL 生成 prompt，確保數據隔離
+    _sql_prompt = _SQL_SYSTEM_PROMPT_BASE.replace("{USER_ID}", str(user_id))
+
     # ── Step 1：自然語言 → SQL ─────────────────────────────────────────────
     try:
-        raw_sql = _call_gemini(client, _SQL_SYSTEM_PROMPT, user_question)
+        raw_sql = _call_gemini(client, _sql_prompt, user_question)
     except Exception as e:
         return f"⚠️ Gemini API 呼叫失敗：{e}"
 
@@ -203,15 +202,15 @@ def ask_copilot(user_question: str) -> str:
     rows, error = _execute_sql(sql)
 
     if error:
-        # 第一次失敗：把錯誤回饋給 Gemini，要求修正 SQL
         retry_prompt = (
             f"原始問題：{user_question}\n\n"
             f"你上一次產生的 SQL 執行失敗了：\n```\n{sql}\n```\n\n"
             f"錯誤訊息：{error}\n\n"
+            f"重要：查詢必須包含 WHERE user_id = {user_id} 條件。\n"
             "請修正 SQL 語法並重新輸出（只輸出純 SQL，不要解釋）。"
         )
         try:
-            raw_sql_retry = _call_gemini(client, _SQL_SYSTEM_PROMPT, retry_prompt)
+            raw_sql_retry = _call_gemini(client, _sql_prompt, retry_prompt)
             sql = _extract_sql(raw_sql_retry)
         except Exception as e:
             return f"⚠️ SQL 修正失敗：{e}"

@@ -13,7 +13,7 @@ import ccxt
 import pandas as pd
 import plotly.graph_objects as go
 from dotenv import load_dotenv
-from database import init_db, insert_trade
+from database import init_db, insert_trade, create_user, verify_user
 from ai_copilot import ask_copilot
 # ── 載入 .env（放在所有 st.* 呼叫之前）────────────────────────────────────────
 load_dotenv()
@@ -135,55 +135,70 @@ st.markdown("""
     border-radius: 8px;
     overflow: hidden;
   }
+
+  /* ── Login wall ── */
+  .login-card {
+    background: linear-gradient(135deg, #0D1321 0%, #111827 100%);
+    border: 1px solid #1E2D45;
+    border-radius: 14px 14px 0 0;
+    padding: 2.2rem 2.4rem 1.6rem;
+    margin-bottom: -1px;
+    text-align: center;
+  }
+  .login-title {
+    font-size: 1.7rem;
+    font-weight: 900;
+    color: #00C2FF;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.45rem;
+  }
+  .login-sub {
+    font-size: 0.83rem;
+    color: #5B7494;
+  }
 </style>
 """, unsafe_allow_html=True)
 
-# ── 持久化存檔路徑 ────────────────────────────────────────────────────────────
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fox_sandbox_state.json")
+_STATE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _user_state_path(user_id: int) -> str:
+    return os.path.join(_STATE_DIR, f"fox_sandbox_state_{user_id}.json")
 
 
 def save_state() -> None:
-    """將虛擬沙盒狀態寫入 JSON 存檔（靜默執行）。"""
+    """將虛擬沙盒狀態寫入使用者專屬 JSON 存檔（靜默執行）。"""
     try:
+        _uid = st.session_state.get("user_id", 0)
         payload = {
             "virtual_balance":     st.session_state.virtual_balance,
             "virtual_positions":   st.session_state.virtual_positions,
             "virtual_history_log": st.session_state.get("virtual_history_log", []),
         }
-        with open(STATE_FILE, "w", encoding="utf-8") as _f:
+        with open(_user_state_path(_uid), "w", encoding="utf-8") as _f:
             json.dump(payload, _f, ensure_ascii=False, indent=2)
     except Exception:
-        pass  # 存檔失敗不影響主流程
+        pass
 
 
 # ── Session state init ────────────────────────────────────────────────────────
-# 嘗試從存檔讀取虛擬沙盒狀態（跨重整保留記憶）
-_persisted_balance:   float = 100_000.0
-_persisted_positions: list  = []
-_persisted_history:   list  = []
-if "virtual_balance" not in st.session_state:   # 只在冷啟動時讀取一次
-    try:
-        if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, "r", encoding="utf-8") as _f:
-                _saved = json.load(_f)
-            _persisted_balance   = float(_saved.get("virtual_balance",     100_000.0))
-            _persisted_positions = list(_saved.get("virtual_positions",     []))
-            _persisted_history   = list(_saved.get("virtual_history_log",   []))
-    except Exception:
-        pass  # 讀取失敗 → 沿用預設值，不中斷啟動
-
 defaults = {
+    "logged_in":           False,
+    "user_id":             0,
+    "username":            "",
+    "_sandbox_loaded":     False,       # 登入後才從存檔載入一次
+    "selected_symbol":     "BTC/USDT",
     "price_history":       [],
     "alerted":             set(),
     "alert_active":        False,
     "alert_msg":           "",
     "prev_price":          None,
-    # ── 虛擬量化沙盒（優先從存檔恢復）─────────────────────────────────────
-    "virtual_balance":     _persisted_balance,    # 恢復餘額（或初始 10 萬 U）
-    "virtual_positions":   _persisted_positions,  # 恢復持倉列表
-    "virtual_history_log": _persisted_history,    # 手動平倉歷史紀錄
-    "agent_log":           [],                    # AI 決策日誌 list[str]，最新在前
-    "copilot_history":     [],                    # AI 副駕對話紀錄 list[dict]
+    # ── 虛擬量化沙盒（預設值；登入後由 _sandbox_loaded 機制從存檔覆蓋）─────
+    "virtual_balance":     100_000.0,
+    "virtual_positions":   [],
+    "virtual_history_log": [],
+    "agent_log":           [],
+    "copilot_history":     [],
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -917,6 +932,7 @@ def _run_trailing_stop() -> None:
                 pnl         = float(pnl),
                 score       = int(vp.get("score") or 0),
                 exit_reason = _exit_reason,
+                user_id     = st.session_state.get("user_id", 0),
             )
 
         except Exception as _ex:
@@ -926,16 +942,104 @@ def _run_trailing_stop() -> None:
     st.session_state.agent_log = st.session_state.agent_log[:AGENT_LOG_MAX]
 
 
+# ── 登入攔截牆 (Multi-user SaaS) ─────────────────────────────────────────────
+if not st.session_state.get("logged_in", False):
+    _, _lc, _ = st.columns([1, 1.6, 1])
+    with _lc:
+        st.markdown(
+            '<div class="login-card">'
+            '<div class="login-title">🦊 Project F.O.X.</div>'
+            '<div class="login-sub">AI 量化交易後台 &nbsp;·&nbsp; 指揮官驗證系統</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        _tab_login, _tab_register = st.tabs(["🔐 登入", "📝 建立帳號"])
+
+        with _tab_login:
+            with st.form("fox_login"):
+                _username = st.text_input("帳號", placeholder="輸入指揮官帳號")
+                _password = st.text_input("密碼", placeholder="輸入存取密碼",
+                                          type="password")
+                _login_btn = st.form_submit_button(
+                    "🔐 登入指揮中心", type="primary", use_container_width=True
+                )
+            if _login_btn:
+                _uid = verify_user(_username, _password)
+                if _uid is not None:
+                    st.session_state.logged_in  = True
+                    st.session_state.user_id    = _uid
+                    st.session_state.username   = _username.strip()
+                    st.rerun()
+                else:
+                    st.error("❌ 帳號或密碼錯誤，請重試。")
+
+        with _tab_register:
+            with st.form("fox_register"):
+                _reg_user  = st.text_input("新帳號", placeholder="3–20 個字元")
+                _reg_pass  = st.text_input("密碼",   placeholder="至少 6 個字元",
+                                           type="password")
+                _reg_pass2 = st.text_input("確認密碼", placeholder="再輸入一次密碼",
+                                           type="password")
+                _reg_btn = st.form_submit_button(
+                    "📝 建立帳號", type="primary", use_container_width=True
+                )
+            if _reg_btn:
+                if _reg_pass != _reg_pass2:
+                    st.error("❌ 兩次密碼不一致，請重新確認。")
+                else:
+                    _ok, _msg = create_user(_reg_user, _reg_pass)
+                    if _ok:
+                        st.success(f"✅ {_msg}")
+                    else:
+                        st.error(f"❌ {_msg}")
+    st.stop()
+
+# ── 登入後：按需載入使用者專屬沙盒狀態（每個 browser session 只執行一次）──────
+if not st.session_state._sandbox_loaded:
+    _sf = _user_state_path(st.session_state.user_id)
+    if os.path.exists(_sf):
+        try:
+            with open(_sf, "r", encoding="utf-8") as _f:
+                _saved = json.load(_f)
+            st.session_state.virtual_balance     = float(_saved.get("virtual_balance",     100_000.0))
+            st.session_state.virtual_positions   = list(_saved.get("virtual_positions",     []))
+            st.session_state.virtual_history_log = list(_saved.get("virtual_history_log",   []))
+        except Exception:
+            pass
+    st.session_state._sandbox_loaded = True
+
+# ── 幣種別警報線設定表（min / max / default / step / format）────────────────
+_FLOOR_CFG: dict = {
+    "BTC/USDT": {"min": 50_000, "max": 120_000, "value": 70_500, "step": 100,  "fmt": "%d"},
+    "ETH/USDT": {"min": 500,    "max": 10_000,  "value": 2_000,  "step": 50,   "fmt": "%d"},
+    "ADA/USDT": {"min": 0.10,   "max": 5.0,     "value": 0.50,   "step": 0.05, "fmt": "%.2f"},
+}
+
 # ═════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ═════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## 🦊 F.O.X. 參數設定")
+    _uname = st.session_state.get("username", "")
+    if _uname:
+        st.markdown(
+            f"<div style='font-size:0.72rem;color:#5B7494;margin-top:-0.5rem'>"
+            f"👤 指揮官：<span style='color:#00C2FF'>{_uname}</span></div>",
+            unsafe_allow_html=True,
+        )
     st.divider()
 
+    st.selectbox(
+        "🎯 交易標的 (Symbol)",
+        ["BTC/USDT", "ETH/USDT", "ADA/USDT"],
+        key="selected_symbol",
+    )
+    st.divider()
+
+    _fcfg = _FLOOR_CFG.get(st.session_state.selected_symbol, _FLOOR_CFG["BTC/USDT"])
     st.slider("🔻 跌破警報線 (USDT)",
-              min_value=50_000, max_value=120_000, value=70_500,
-              step=100, format="%d", key="price_floor")
+              min_value=_fcfg["min"], max_value=_fcfg["max"], value=_fcfg["value"],
+              step=_fcfg["step"], format=_fcfg["fmt"], key="price_floor")
     st.slider("⚡ 急跌警報 % (1 分鐘)",
               min_value=0.1, max_value=5.0, value=0.5,
               step=0.1, format="%.1f%%", key="drop_pct")
@@ -978,13 +1082,32 @@ with st.sidebar:
             save_state()
             st.rerun()
 
+    st.divider()
+    if st.button("🚪 登出指揮中心", width="stretch"):
+        for _k in ("logged_in", "user_id", "username", "_sandbox_loaded",
+                   "virtual_balance", "virtual_positions", "virtual_history_log",
+                   "agent_log", "copilot_history", "price_history",
+                   "alert_active", "alert_msg", "prev_price"):
+            st.session_state.pop(_k, None)
+        st.rerun()
+
+# ── 幣種切換偵測：清空走勢快取 + 重置警報 + 讓 slider 回到新幣種預設值 ───────
+if st.session_state.get("_price_sym") != st.session_state.selected_symbol:
+    st.session_state.price_history = []
+    st.session_state.prev_price    = None
+    st.session_state.alert_active  = False
+    st.session_state.alert_msg     = ""
+    st.session_state.alerted       = set()
+    st.session_state.pop("price_floor", None)   # 刪除舊 key → slider 以新幣種預設值渲染
+    st.session_state["_price_sym"] = st.session_state.selected_symbol
+
 # ═════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ═════════════════════════════════════════════════════════════════════════════
 st.markdown(
-    "### 🦊 Project F.O.X. &nbsp;&nbsp;"
-    "<span style='font-size:0.9rem;color:#5B7494;font-weight:400'>"
-    "AI 量化交易後台 · BTC/USDT 永續合約 · Binance Futures</span>",
+    f"### 🦊 Project F.O.X. &nbsp;&nbsp;"
+    f"<span style='font-size:0.9rem;color:#5B7494;font-weight:400'>"
+    f"AI 量化交易後台 · {st.session_state.selected_symbol} 永續合約 · Binance Futures</span>",
     unsafe_allow_html=True,
 )
 st.markdown(
@@ -1039,12 +1162,14 @@ def frag_sandbox() -> None:
 # ── Fragment 2：即時報價 + 警報 + 真實資產卡 (5s) ──────────────────────────
 @st.fragment(run_every=5)
 def frag_ticker() -> None:
+    _sym = st.session_state.selected_symbol
+    _sym_base = _sym.split("/")[0]
     _price = None; _fetch_err = None
     try:
-        _t     = get_exchange().fetch_ticker("BTC/USDT")
+        _t     = get_exchange().fetch_ticker(_sym)
         _price = float(_t["last"]); _now = datetime.now()
         st.session_state.price_history.append(
-            {"time": _now.strftime("%H:%M:%S"), "ts": _now.timestamp(), "BTC/USDT": _price})
+            {"time": _now.strftime("%H:%M:%S"), "ts": _now.timestamp(), "price": _price})
         if len(st.session_state.price_history) > MAX_CHART_POINTS:
             st.session_state.price_history = st.session_state.price_history[-MAX_CHART_POINTS:]
     except Exception as exc:
@@ -1063,7 +1188,7 @@ def frag_ticker() -> None:
             st.session_state.alerted.discard("floor")
         _win = [e for e in _h if e["ts"] >= _nt - HISTORY_WINDOW_SEC]
         if len(_win) > 1:
-            _op = _win[0]["BTC/USDT"]
+            _op = _win[0]["price"]
             if _op > 0:
                 _dp = (_op - _price) / _op * 100
                 if _dp >= _dpt:
@@ -1119,25 +1244,26 @@ def frag_ticker() -> None:
         _ba = "▲" if _delta >= 0 else "▼"; _bc = "val-green" if _delta >= 0 else "val-red"
         st.markdown(f'<div class="metric-card"><div class="metric-label">Unrealized P&amp;L</div>'
                     f'<div class="metric-value {_pc}">{_ps}</div>'
-                    f'<div class="metric-sub">BTC <span class="{_bc}">{_ba} {abs(_delta):,.2f}</span>'
+                    f'<div class="metric-sub">{_sym_base} <span class="{_bc}">{_ba} {abs(_delta):,.2f}</span>'
                     f'</div></div>', unsafe_allow_html=True)
     with _m4:
         _cnt = _plen if _plen is not None else "—"
         _cc  = "val-cyan" if _plen is not None else "val-white"
         st.markdown(f'<div class="metric-card"><div class="metric-label">Positions</div>'
                     f'<div class="metric-value {_cc}">{_cnt}</div>'
-                    f'<div class="metric-sub">BTC 現價：<span class="val-white">${_pdsp:,.2f}'
+                    f'<div class="metric-sub">{_sym_base} 現價：<span class="val-white">${_pdsp:,.2f}'
                     f'</span></div></div>', unsafe_allow_html=True)
-    if _fetch_err: st.warning(f"⚠️ 無法取得 BTC 現價：{_fetch_err}")
+    if _fetch_err: st.warning(f"⚠️ 無法取得 {_sym_base} 現價：{_fetch_err}")
 
 
 # ── Fragment 3：BTC 走勢圖 (5s) ────────────────────────────────────────────
 @st.fragment(run_every=5)
 def frag_chart() -> None:
-    st.markdown('<div class="section-header">📈 BTC/USDT 即時走勢</div>', unsafe_allow_html=True)
+    _chart_sym = st.session_state.selected_symbol
+    st.markdown(f'<div class="section-header">📈 {_chart_sym} 即時走勢</div>', unsafe_allow_html=True)
     _h = st.session_state.price_history
     if len(_h) > 1:
-        _df = pd.DataFrame(_h); _p = _df["BTC/USDT"]
+        _df = pd.DataFrame(_h); _p = _df["price"]
         _sp = max(_p.max() - _p.min(), _p.max() * 0.0005); _buf = _sp * 0.15
         _fig = go.Figure()
         _fig.add_trace(go.Scatter(x=_df["time"], y=_p, mode="lines",
@@ -1146,7 +1272,7 @@ def frag_chart() -> None:
             line=dict(color="#00FF88", width=2), fill="tozeroy",
             fillcolor="rgba(0,255,136,0.10)",
             hovertemplate="<b>%{x}</b><br><span style='color:#00FF88'>$%{y:,.2f}</span><extra></extra>",
-            name="BTC/USDT"))
+            name=_chart_sym))
         _ax = dict(showgrid=False, zeroline=False, showline=False, showticklabels=True)
         _fig.update_layout(
             height=300, margin=dict(l=4, r=4, t=8, b=4),
@@ -1609,6 +1735,7 @@ with _tab3:
                         pnl         = float(_mo_pnl),
                         score       = int(_mo_target.get("score") or 0),
                         exit_reason = "手動平倉",
+                        user_id     = st.session_state.get("user_id", 0),
                     )
 
                     # ── 從 virtual_positions 刪除 Open 倉位 ───────────────────
@@ -1699,7 +1826,10 @@ with _tab4:
         with _chat_container:
             with st.chat_message("assistant", avatar="🦊"):
                 with st.spinner("狐影正在分析資料庫…"):
-                    _answer = ask_copilot(_question)
+                    _answer = ask_copilot(
+                        _question,
+                        user_id=st.session_state.get("user_id", 0),
+                    )
                 st.markdown(_answer)
 
         # 把 AI 回應加入對話紀錄

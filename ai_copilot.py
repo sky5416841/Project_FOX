@@ -13,8 +13,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── DB 路徑（與 database.py 保持一致）────────────────────────────────────────
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fox_trading.db")
+# ── DB 路徑（與 database.py 保持一致；FOX_DATA_DIR 供 Docker 掛載覆蓋）──────
+_DATA_DIR = os.getenv("FOX_DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
+DB_PATH   = os.path.join(_DATA_DIR, "fox_trading.db")
 
 # ── 資料庫 Schema（注入 SQL 生成 prompt，純事實描述）────────────────────────
 _SCHEMA_DESCRIPTION = """

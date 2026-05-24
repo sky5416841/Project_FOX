@@ -202,7 +202,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-_STATE_DIR = os.path.dirname(os.path.abspath(__file__))
+_STATE_DIR = os.getenv("FOX_DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
 
 
 def _user_state_path(user_id: int) -> str:

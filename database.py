@@ -8,7 +8,8 @@ import os
 import sqlite3
 from typing import Optional
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fox_trading.db")
+_DATA_DIR = os.getenv("FOX_DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
+DB_PATH    = os.path.join(_DATA_DIR, "fox_trading.db")
 
 _PBKDF2_ITERATIONS = 260_000
 _HASH_ALGO = "sha256"

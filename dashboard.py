@@ -1204,8 +1204,9 @@ def frag_ticker() -> None:
     except Exception as exc:
         _fetch_err = str(exc)
 
-    _pf  = st.session_state.get("price_floor", 70_500)
-    _dpt = st.session_state.get("drop_pct", 0.5)
+    _floor_def = _FLOOR_CFG.get(_sym, _FLOOR_CFG["BTC/USDT"])["value"]
+    _pf        = st.session_state.get("price_floor", _floor_def)
+    _dpt       = st.session_state.get("drop_pct", 0.5)
     if _price is not None:
         _h = st.session_state.price_history; _nt = _h[-1]["ts"]
         if _price < _pf:
@@ -1237,11 +1238,16 @@ def frag_ticker() -> None:
     if _price: st.session_state.prev_price = _price
 
     _aerr = _equity = _free = _plen = None
+    _api_unbound = False
     try:
         _b = fetch_account_balance()
-        if _b is None: _aerr = "未設定 API 金鑰（.env 缺少 API_KEY / API_SECRET）"
-        else: _equity = _b["total"]; _free = _b["free"]
-    except ccxt.AuthenticationError as e: _aerr = f"API 驗證失敗：{e}"
+        if _b is None:
+            _api_unbound = True          # 未設定 API Key，靜默處理
+        else:
+            _equity = _b["total"]
+            _free   = _b["free"]
+    except ccxt.AuthenticationError:
+        _api_unbound = True              # 金鑰無效（-2015 等），靜默處理
     except ccxt.NetworkError       as e: _aerr = f"網路錯誤：{e}"
     except Exception               as e: _aerr = f"帳戶餘額查詢失敗：{e}"
 
@@ -1255,14 +1261,24 @@ def frag_ticker() -> None:
 
     _m1, _m2, _m3, _m4 = st.columns(4)
     with _m1:
-        _es = f"${_equity:>12,.2f}" if _equity is not None else "— 無法取得 —"
+        if _api_unbound:
+            _es, _ecls = "未綁定 API Key", "val-white"
+        elif _equity is not None:
+            _es, _ecls = f"${_equity:>12,.2f}", "val-cyan"
+        else:
+            _es, _ecls = "— 無法取得 —", "val-red"
         st.markdown(f'<div class="metric-card"><div class="metric-label">Total Equity</div>'
-                    f'<div class="metric-value {"val-cyan" if _equity else "val-red"}">{_es}</div>'
+                    f'<div class="metric-value {_ecls}">{_es}</div>'
                     f'<div class="metric-sub">帳戶總資產 (USDT)</div></div>', unsafe_allow_html=True)
     with _m2:
-        _fs = f"${_free:>12,.2f}" if _free is not None else "— 無法取得 —"
+        if _api_unbound:
+            _fs, _fcls = "未綁定 API Key", "val-white"
+        elif _free is not None:
+            _fs, _fcls = f"${_free:>12,.2f}", "val-white"
+        else:
+            _fs, _fcls = "— 無法取得 —", "val-red"
         st.markdown(f'<div class="metric-card"><div class="metric-label">Available Balance</div>'
-                    f'<div class="metric-value {"val-white" if _free else "val-red"}">{_fs}</div>'
+                    f'<div class="metric-value {_fcls}">{_fs}</div>'
                     f'<div class="metric-sub">可用保證金 (USDT)</div></div>', unsafe_allow_html=True)
     with _m3:
         if _pdf is not None and not _pdf.empty and "UPNL" in _pdf.columns:

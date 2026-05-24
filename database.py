@@ -68,6 +68,16 @@ def init_db() -> None:
                 conn.execute(
                     "ALTER TABLE trade_history ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"
                 )
+            # 預載管理員帳號（冪等：已存在則跳過）
+            _admin_row = conn.execute(
+                "SELECT 1 FROM users WHERE username = 'admin'"
+            ).fetchone()
+            if not _admin_row:
+                conn.execute(
+                    "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                    ("admin", _hash_password("fox123")),
+                )
+                print("[FOX][DB] admin 帳號已自動建立（預設密碼：fox123）")
             conn.commit()
     except Exception as e:
         print(f"[FOX][DB][WARN] init_db 失敗：{e}")

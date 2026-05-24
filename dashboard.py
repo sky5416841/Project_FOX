@@ -6,6 +6,9 @@ import os
 import json
 import time
 import ctypes
+import hashlib
+import hmac
+import secrets
 from datetime import datetime
 
 import streamlit as st
@@ -16,9 +19,45 @@ from plotly.subplots import make_subplots
 from dotenv import load_dotenv
 from database import init_db, insert_trade, create_user, verify_user
 from ai_copilot import ask_copilot
+try:
+    from streamlit_cookies_controller import CookieController as _CookieController
+    _COOKIES_AVAILABLE = True
+except ImportError:
+    _COOKIES_AVAILABLE = False
 # ── 載入 .env（放在所有 st.* 呼叫之前）────────────────────────────────────────
 load_dotenv()
 init_db()   # 初始化 SQLite 持久化資料庫
+
+# ── Cookie 驗證常數 ────────────────────────────────────────────────────────────
+_COOKIE_NAME    = "fox_auth"
+_COOKIE_DAYS    = 7
+_COOKIE_SECRET  = os.getenv("COOKIE_SECRET") or hashlib.sha256(
+    (os.getenv("GEMINI_API_KEY", "") + os.getenv("API_KEY", "") + "FOX_SALT").encode()
+).hexdigest()
+
+
+def _make_auth_token(user_id: int, username: str) -> str:
+    """生成 HMAC-SHA256 簽名的認證 token，格式：uid:username:expiry:sig"""
+    expiry = int(time.time()) + _COOKIE_DAYS * 86400
+    payload = f"{user_id}:{username}:{expiry}"
+    sig = hmac.new(_COOKIE_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}:{sig}"
+
+
+def _verify_auth_token(token: str) -> tuple[int, str] | None:
+    """驗證 token，成功回傳 (user_id, username)，失敗回傳 None。"""
+    try:
+        uid_str, username, expiry_str, sig = token.rsplit(":", 3)
+        if int(expiry_str) < int(time.time()):
+            return None
+        payload = f"{uid_str}:{username}:{expiry_str}"
+        expected = hmac.new(_COOKIE_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            return None
+        return int(uid_str), username
+    except Exception:
+        return None
+
 
 # ── Page config (MUST be first Streamlit call) ────────────────────────────────
 st.set_page_config(
@@ -26,6 +65,9 @@ st.set_page_config(
     page_icon="🦊",
     layout="wide",
 )
+
+# ── Cookie Controller（持久登入）─────────────────────────────────────────────
+_cookies = _CookieController() if _COOKIES_AVAILABLE else None
 
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -971,6 +1013,20 @@ def _run_trailing_stop() -> None:
     st.session_state.agent_log = st.session_state.agent_log[:AGENT_LOG_MAX]
 
 
+# ── Cookie 自動登入（僅在尚未登入時執行）─────────────────────────────────────
+if not st.session_state.get("logged_in", False) and _cookies is not None:
+    try:
+        _stored_token = _cookies.get(_COOKIE_NAME)
+        if _stored_token:
+            _result = _verify_auth_token(str(_stored_token))
+            if _result is not None:
+                _c_uid, _c_uname = _result
+                st.session_state.logged_in = True
+                st.session_state.user_id   = _c_uid
+                st.session_state.username  = _c_uname
+    except Exception:
+        pass   # cookie 讀取失敗時靜默降級，使用者仍需手動登入
+
 # ── 登入攔截牆 (Multi-user SaaS) ─────────────────────────────────────────────
 if not st.session_state.get("logged_in", False):
     _, _lc, _ = st.columns([1, 1.6, 1])
@@ -998,6 +1054,15 @@ if not st.session_state.get("logged_in", False):
                     st.session_state.logged_in  = True
                     st.session_state.user_id    = _uid
                     st.session_state.username   = _username.strip()
+                    if _cookies is not None:
+                        try:
+                            _cookies.set(
+                                _COOKIE_NAME,
+                                _make_auth_token(_uid, _username.strip()),
+                                max_age=_COOKIE_DAYS * 86400,
+                            )
+                        except Exception:
+                            pass
                     st.rerun()
                 else:
                     st.error("❌ 帳號或密碼錯誤，請重試。")
@@ -1113,6 +1178,11 @@ with st.sidebar:
 
     st.divider()
     if st.button("🚪 登出指揮中心", width="stretch"):
+        if _cookies is not None:
+            try:
+                _cookies.remove(_COOKIE_NAME)
+            except Exception:
+                pass
         for _k in ("logged_in", "user_id", "username", "_sandbox_loaded",
                    "virtual_balance", "virtual_positions", "virtual_history_log",
                    "agent_log", "copilot_history", "price_history",

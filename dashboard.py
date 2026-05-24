@@ -12,6 +12,7 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from dotenv import load_dotenv
 from database import init_db, insert_trade, create_user, verify_user
 from ai_copilot import ask_copilot
@@ -1284,7 +1285,7 @@ def frag_ticker() -> None:
     if _fetch_err: st.warning(f"⚠️ 無法取得 {_sym_base} 現價：{_fetch_err}")
 
 
-# ── Fragment 3：互動式 K 線圖 (60s 自動刷新，幣種/時間級別切換即時更新) ─────
+# ── Fragment 3：完全體看盤終端 (K線 + MA7/MA25 + 成交量副圖, 60s 刷新) ───────
 _TF_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 
 @st.fragment(run_every=60)
@@ -1302,13 +1303,17 @@ def frag_chart() -> None:
     )
 
     st.markdown(
-        f'<div class="section-header">📈 {_chart_sym} K 線圖 &nbsp;·&nbsp; {_tf}</div>',
+        f'<div class="section-header">'
+        f'📈 {_chart_sym} 完全體看盤 &nbsp;·&nbsp; {_tf} &nbsp;·&nbsp; '
+        f'<span style="color:#FFD700;font-weight:700">MA7</span>'
+        f'&nbsp;&nbsp;'
+        f'<span style="color:#9B59B6;font-weight:700">MA25</span>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
-    # ── 抓取 OHLCV（快取，依幣種+時間級別區分）──────────────────────────────
+    # ── 抓取 OHLCV ────────────────────────────────────────────────────────────
     _df, _err = fetch_ohlcv_data(_chart_sym, _tf, limit=100)
-
     if _err:
         st.warning(f"⚠️ {_err}")
         return
@@ -1316,13 +1321,30 @@ def frag_chart() -> None:
         st.info("📡 K 線資料載入中…")
         return
 
-    # ── 繪製互動 K 線圖 ───────────────────────────────────────────────────────
-    _fig = go.Figure(go.Candlestick(
+    # ── 計算移動平均線 ────────────────────────────────────────────────────────
+    _df = _df.copy()
+    _df["ma7"]  = _df["close"].rolling(7,  min_periods=1).mean()
+    _df["ma25"] = _df["close"].rolling(25, min_periods=1).mean()
+
+    # ── 成交量顏色（收盤 >= 開盤 → 綠；否則紅）──────────────────────────────
+    _vol_colors = [
+        "rgba(0,255,136,0.55)" if c >= o else "rgba(255,75,75,0.55)"
+        for c, o in zip(_df["close"], _df["open"])
+    ]
+
+    # ── 雙層子圖：主圖 80% + 成交量副圖 20% ─────────────────────────────────
+    _fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.80, 0.20],
+        vertical_spacing=0.02,
+    )
+
+    # ── Row 1：K 線圖 ─────────────────────────────────────────────────────────
+    _fig.add_trace(go.Candlestick(
         x=_df["timestamp"],
-        open=_df["open"],
-        high=_df["high"],
-        low=_df["low"],
-        close=_df["close"],
+        open=_df["open"], high=_df["high"],
+        low=_df["low"],   close=_df["close"],
         increasing_line_color="#00FF88",
         increasing_fillcolor="rgba(0,255,136,0.75)",
         decreasing_line_color="#FF4B4B",
@@ -1333,41 +1355,85 @@ def frag_chart() -> None:
             for o, h, l, c in zip(_df["open"], _df["high"], _df["low"], _df["close"])
         ],
         hoverinfo="x+text",
-    ))
+        showlegend=False,
+    ), row=1, col=1)
+
+    # ── Row 1：MA7（金黃色）──────────────────────────────────────────────────
+    _fig.add_trace(go.Scatter(
+        x=_df["timestamp"], y=_df["ma7"],
+        mode="lines",
+        line=dict(color="#FFD700", width=1.5),
+        name="MA7",
+        hovertemplate="MA7: $%{y:,.4f}<extra></extra>",
+    ), row=1, col=1)
+
+    # ── Row 1：MA25（紫色）───────────────────────────────────────────────────
+    _fig.add_trace(go.Scatter(
+        x=_df["timestamp"], y=_df["ma25"],
+        mode="lines",
+        line=dict(color="#9B59B6", width=1.5),
+        name="MA25",
+        hovertemplate="MA25: $%{y:,.4f}<extra></extra>",
+    ), row=1, col=1)
+
+    # ── Row 2：成交量柱狀圖（漲跌染色）──────────────────────────────────────
+    _fig.add_trace(go.Bar(
+        x=_df["timestamp"], y=_df["volume"],
+        marker_color=_vol_colors,
+        name="Volume",
+        hovertemplate="Vol: %{y:,.0f}<extra></extra>",
+        showlegend=False,
+    ), row=2, col=1)
+
+    # ── 版面排版 ──────────────────────────────────────────────────────────────
+    _ax_base = dict(showgrid=False, zeroline=False, tickfont=dict(size=9, color="#3D5070"))
     _fig.update_layout(
-        height=360,
+        height=460,
         template="plotly_dark",
         paper_bgcolor="#080C12",
         plot_bgcolor="#080C12",
         font=dict(color="#5B7494", family="monospace"),
         margin=dict(l=4, r=4, t=8, b=4),
-        showlegend=False,
-        xaxis_rangeslider_visible=False,
-        xaxis=dict(
-            showgrid=False, zeroline=False,
-            tickfont=dict(size=10, color="#3D5070"),
-        ),
-        yaxis=dict(
-            showgrid=True, gridcolor="rgba(30,45,69,0.5)",
-            zeroline=False,
-            tickformat=",.4f", tickprefix="$",
-            tickfont=dict(size=10, color="#3D5070"),
-            side="right",
-        ),
         hovermode="x unified",
         hoverlabel=dict(
             bgcolor="#0D1321", bordercolor="#1E2D45",
-            font=dict(color="#E0E6F0", size=12, family="monospace"),
+            font=dict(color="#E0E6F0", size=11, family="monospace"),
+        ),
+        legend=dict(
+            orientation="h", x=0.01, y=0.985,
+            font=dict(size=10, color="#8BA5C5"),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        xaxis=dict(**_ax_base),
+        xaxis2=dict(**_ax_base),
+        yaxis=dict(
+            showgrid=True, gridcolor="rgba(30,45,69,0.5)",
+            zeroline=False, tickprefix="$",
+            tickfont=dict(size=9, color="#3D5070"),
+            side="right",
+        ),
+        yaxis2=dict(
+            showgrid=False, zeroline=False,
+            tickfont=dict(size=8, color="#3D5070"),
+            side="right",
         ),
     )
+    _fig.update_xaxes(rangeslider_visible=False)
+
     st.plotly_chart(_fig, width="stretch", config={
         "displayModeBar": True,
         "modeBarButtonsToRemove": ["autoScale2d", "lasso2d", "select2d", "toImage"],
         "scrollZoom": True,
     })
+
+    _last_c  = _df["close"].iloc[-1]
+    _ma7_v   = _df["ma7"].iloc[-1]
+    _ma25_v  = _df["ma25"].iloc[-1]
+    _last_ts = _df["timestamp"].iloc[-1].strftime("%H:%M")
     st.caption(
-        f"資料來源：Binance Futures · {_chart_sym} · {_tf} · "
-        f"最後 K 線：{_df['timestamp'].iloc[-1].strftime('%H:%M')} · "
+        f"Binance Futures · {_chart_sym} · {_tf} · 最後 K 線：{_last_ts} · "
+        f"收 ${_last_c:,.4f} · "
+        f"MA7 ${_ma7_v:,.4f} · MA25 ${_ma25_v:,.4f} · "
         f"拖曳平移 / 滾輪縮放"
     )
 

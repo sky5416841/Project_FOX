@@ -73,11 +73,15 @@ def init_db() -> None:
                 "SELECT 1 FROM users WHERE username = 'admin'"
             ).fetchone()
             if not _admin_row:
-                conn.execute(
-                    "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                    ("admin", _hash_password("fox123")),
-                )
-                print("[FOX][DB] admin 帳號已自動建立（預設密碼：fox123）")
+                _default_pwd = os.getenv("ADMIN_DEFAULT_PWD")
+                if _default_pwd:
+                    conn.execute(
+                        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                        ("admin", _hash_password(_default_pwd)),
+                    )
+                    print("[FOX][DB] admin 帳號已自動建立（密碼來源：ADMIN_DEFAULT_PWD）")
+                else:
+                    print("[FOX][DB][WARN] ADMIN_DEFAULT_PWD 未設定，跳過 admin 自動建立")
             conn.commit()
     except Exception as e:
         print(f"[FOX][DB][WARN] init_db 失敗：{e}")

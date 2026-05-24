@@ -188,6 +188,7 @@ defaults = {
     "username":            "",
     "_sandbox_loaded":     False,       # 登入後才從存檔載入一次
     "selected_symbol":     "BTC/USDT",
+    "selected_timeframe":  "15m",
     "price_history":       [],
     "alerted":             set(),
     "alert_active":        False,
@@ -270,6 +271,33 @@ def fetch_real_positions() -> pd.DataFrame | None:
             "UPNL":       round(float(upnl), 4),
         })
     return pd.DataFrame(rows)
+
+# ── OHLCV K 線資料（依幣種 + 時間級別快取）──────────────────────────────────
+_TF_TTL = {
+    "1m": 30, "5m": 60, "15m": 120,
+    "30m": 180, "1h": 300, "4h": 600, "1d": 1800,
+}
+
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_ohlcv_data(symbol: str, timeframe: str, limit: int = 100) -> tuple[pd.DataFrame, str | None]:
+    """取得 OHLCV K 線，回傳 (DataFrame, error_msg)。cache TTL 由呼叫端控制失效。"""
+    try:
+        ex  = get_exchange()
+        raw = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        if not raw:
+            return pd.DataFrame(), f"取不到 {symbol} {timeframe} K 線資料"
+        df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        return df, None
+    except ccxt.RateLimitExceeded as e:
+        return pd.DataFrame(), f"Binance Rate Limit 觸發：{e}"
+    except ccxt.NetworkError as e:
+        return pd.DataFrame(), f"網路連線錯誤：{e}"
+    except ccxt.ExchangeError as e:
+        return pd.DataFrame(), f"交易所錯誤：{e}"
+    except Exception as e:
+        return pd.DataFrame(), f"K 線取得失敗：{e}"
+
 
 # ── Beep ──────────────────────────────────────────────────────────────────────
 def beep() -> None:
@@ -1256,38 +1284,92 @@ def frag_ticker() -> None:
     if _fetch_err: st.warning(f"⚠️ 無法取得 {_sym_base} 現價：{_fetch_err}")
 
 
-# ── Fragment 3：BTC 走勢圖 (5s) ────────────────────────────────────────────
-@st.fragment(run_every=5)
+# ── Fragment 3：互動式 K 線圖 (60s 自動刷新，幣種/時間級別切換即時更新) ─────
+_TF_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+
+@st.fragment(run_every=60)
 def frag_chart() -> None:
     _chart_sym = st.session_state.selected_symbol
-    st.markdown(f'<div class="section-header">📈 {_chart_sym} 即時走勢</div>', unsafe_allow_html=True)
-    _h = st.session_state.price_history
-    if len(_h) > 1:
-        _df = pd.DataFrame(_h); _p = _df["price"]
-        _sp = max(_p.max() - _p.min(), _p.max() * 0.0005); _buf = _sp * 0.15
-        _fig = go.Figure()
-        _fig.add_trace(go.Scatter(x=_df["time"], y=_p, mode="lines",
-            line=dict(color="rgba(0,255,136,0.18)", width=8), hoverinfo="skip", showlegend=False))
-        _fig.add_trace(go.Scatter(x=_df["time"], y=_p, mode="lines",
-            line=dict(color="#00FF88", width=2), fill="tozeroy",
-            fillcolor="rgba(0,255,136,0.10)",
-            hovertemplate="<b>%{x}</b><br><span style='color:#00FF88'>$%{y:,.2f}</span><extra></extra>",
-            name=_chart_sym))
-        _ax = dict(showgrid=False, zeroline=False, showline=False, showticklabels=True)
-        _fig.update_layout(
-            height=300, margin=dict(l=4, r=4, t=8, b=4),
-            paper_bgcolor="#080C12", plot_bgcolor="#080C12",
-            font=dict(color="#5B7494", family="monospace"), showlegend=False,
-            xaxis=dict(**_ax, tickfont=dict(size=10, color="#3D5070")),
-            yaxis=dict(**_ax, range=[_p.min() - _buf, _p.max() + _buf],
-                       tickformat=",.0f", tickprefix="$",
-                       tickfont=dict(size=10, color="#3D5070"), side="right"),
-            hovermode="x unified",
-            hoverlabel=dict(bgcolor="#0D1321", bordercolor="#1E2D45",
-                            font=dict(color="#E0E6F0", size=12, family="monospace")))
-        st.plotly_chart(_fig, width="stretch", config={"displayModeBar": False})
-    else:
-        st.info("📡 資料累積中…請稍候幾秒")
+
+    # ── 時間級別選擇器 ────────────────────────────────────────────────────────
+    _tf = st.radio(
+        "時間級別",
+        _TF_OPTIONS,
+        index=_TF_OPTIONS.index(st.session_state.get("selected_timeframe", "15m")),
+        horizontal=True,
+        key="selected_timeframe",
+        label_visibility="collapsed",
+    )
+
+    st.markdown(
+        f'<div class="section-header">📈 {_chart_sym} K 線圖 &nbsp;·&nbsp; {_tf}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── 抓取 OHLCV（快取，依幣種+時間級別區分）──────────────────────────────
+    _df, _err = fetch_ohlcv_data(_chart_sym, _tf, limit=100)
+
+    if _err:
+        st.warning(f"⚠️ {_err}")
+        return
+    if _df.empty:
+        st.info("📡 K 線資料載入中…")
+        return
+
+    # ── 繪製互動 K 線圖 ───────────────────────────────────────────────────────
+    _fig = go.Figure(go.Candlestick(
+        x=_df["timestamp"],
+        open=_df["open"],
+        high=_df["high"],
+        low=_df["low"],
+        close=_df["close"],
+        increasing_line_color="#00FF88",
+        increasing_fillcolor="rgba(0,255,136,0.75)",
+        decreasing_line_color="#FF4B4B",
+        decreasing_fillcolor="rgba(255,75,75,0.75)",
+        name=_chart_sym,
+        hovertext=[
+            f"O: {o:,.4f}  H: {h:,.4f}  L: {l:,.4f}  C: {c:,.4f}"
+            for o, h, l, c in zip(_df["open"], _df["high"], _df["low"], _df["close"])
+        ],
+        hoverinfo="x+text",
+    ))
+    _fig.update_layout(
+        height=360,
+        template="plotly_dark",
+        paper_bgcolor="#080C12",
+        plot_bgcolor="#080C12",
+        font=dict(color="#5B7494", family="monospace"),
+        margin=dict(l=4, r=4, t=8, b=4),
+        showlegend=False,
+        xaxis_rangeslider_visible=False,
+        xaxis=dict(
+            showgrid=False, zeroline=False,
+            tickfont=dict(size=10, color="#3D5070"),
+        ),
+        yaxis=dict(
+            showgrid=True, gridcolor="rgba(30,45,69,0.5)",
+            zeroline=False,
+            tickformat=",.4f", tickprefix="$",
+            tickfont=dict(size=10, color="#3D5070"),
+            side="right",
+        ),
+        hovermode="x unified",
+        hoverlabel=dict(
+            bgcolor="#0D1321", bordercolor="#1E2D45",
+            font=dict(color="#E0E6F0", size=12, family="monospace"),
+        ),
+    )
+    st.plotly_chart(_fig, width="stretch", config={
+        "displayModeBar": True,
+        "modeBarButtonsToRemove": ["autoScale2d", "lasso2d", "select2d", "toImage"],
+        "scrollZoom": True,
+    })
+    st.caption(
+        f"資料來源：Binance Futures · {_chart_sym} · {_tf} · "
+        f"最後 K 線：{_df['timestamp'].iloc[-1].strftime('%H:%M')} · "
+        f"拖曳平移 / 滾輪縮放"
+    )
 
 
 # ── Fragment 4：全網廣域雷達 (20s) ─────────────────────────────────────────

@@ -17,8 +17,9 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from dotenv import load_dotenv
-from database import init_db, insert_trade, create_user, verify_user
+from database import init_db, insert_trade, create_user, verify_user, verify_email_token
 from ai_copilot import ask_copilot
+from email_service import send_verification_email
 import streamlit.components.v1 as _stc
 # ── 載入 .env（放在所有 st.* 呼叫之前）────────────────────────────────────────
 load_dotenv()
@@ -1026,6 +1027,19 @@ def _run_trailing_stop() -> None:
     st.session_state.agent_log = st.session_state.agent_log[:AGENT_LOG_MAX]
 
 
+# ── Email 驗證 Token 攔截（優先級最高，UI 渲染前處理）────────────────────────
+_email_token = st.query_params.get("token", "")
+if _email_token:
+    if verify_email_token(_email_token):
+        try:
+            del st.query_params["token"]   # 清除 URL 中的 token 參數
+        except Exception:
+            pass
+        st.success("✅ **帳號驗證成功！** 您的指揮官身份已確認，現在可以登入。")
+        st.balloons()
+    else:
+        st.error("❌ **驗證連結無效或已使用。** 請重新註冊或聯繫管理員。")
+
 # ── Cookie 自動登入（HTTP 層直讀，JS 注入寫入）──────────────────────────────
 # 讀取：st.context.cookies 從 HTTP 請求標頭直接取得，首次渲染即可用，無需等待。
 # 寫入：_write_cookie() 透過 st.components.v1.html() 注入 JS，
@@ -1066,8 +1080,12 @@ if not st.session_state.get("logged_in", False):
                     "🔐 登入指揮中心", type="primary", use_container_width=True
                 )
             if _login_btn:
-                _uid = verify_user(_username, _password)
-                if _uid is not None:
+                _uid, _verified = verify_user(_username, _password)
+                if _uid is None:
+                    st.error("❌ 帳號或密碼錯誤，請重試。")
+                elif not _verified:
+                    st.warning("⚠️ 帳號尚未驗證。請前往信箱點擊驗證連結後再登入。")
+                else:
                     st.session_state.logged_in  = True
                     st.session_state.user_id    = _uid
                     st.session_state.username   = _username.strip()
@@ -1077,13 +1095,12 @@ if not st.session_state.get("logged_in", False):
                         _COOKIE_DAYS * 86400,
                     )
                     st.rerun()
-                else:
-                    st.error("❌ 帳號或密碼錯誤，請重試。")
 
         with _tab_register:
             with st.form("fox_register"):
-                _reg_user  = st.text_input("新帳號", placeholder="3–20 個字元")
-                _reg_pass  = st.text_input("密碼",   placeholder="至少 6 個字元",
+                _reg_user  = st.text_input("帳號",     placeholder="3–20 個字元")
+                _reg_email = st.text_input("電子信箱", placeholder="用於接收驗證信")
+                _reg_pass  = st.text_input("密碼",     placeholder="至少 6 個字元",
                                            type="password")
                 _reg_pass2 = st.text_input("確認密碼", placeholder="再輸入一次密碼",
                                            type="password")
@@ -1094,10 +1111,20 @@ if not st.session_state.get("logged_in", False):
                 if _reg_pass != _reg_pass2:
                     st.error("❌ 兩次密碼不一致，請重新確認。")
                 else:
-                    _ok, _msg = create_user(_reg_user, _reg_pass)
-                    if _ok:
-                        st.success(f"✅ {_msg}")
-                    else:
+                    _ok, _msg, _token = create_user(_reg_user, _reg_pass, _reg_email)
+                    if _ok and _token:
+                        _base_url = os.getenv("APP_BASE_URL", "http://localhost:8501")
+                        _email_ok, _email_msg = send_verification_email(
+                            _reg_email, _reg_user, _token, _base_url
+                        )
+                        if _email_ok:
+                            st.success(f"✅ {_msg}")
+                            st.info(f"📧 驗證信已寄出，請至 **{_reg_email}** 點擊連結完成驗證。")
+                        else:
+                            st.success(f"✅ {_msg}")
+                            st.warning(f"⚠️ 驗證信發送失敗：{_email_msg}\n\n"
+                                       f"請聯繫管理員或確認 SMTP 設定。")
+                    elif not _ok:
                         st.error(f"❌ {_msg}")
     st.stop()
 

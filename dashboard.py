@@ -19,11 +19,7 @@ from plotly.subplots import make_subplots
 from dotenv import load_dotenv
 from database import init_db, insert_trade, create_user, verify_user
 from ai_copilot import ask_copilot
-try:
-    from streamlit_cookies_controller import CookieController as _CookieController
-    _COOKIES_AVAILABLE = True
-except ImportError:
-    _COOKIES_AVAILABLE = False
+import streamlit.components.v1 as _stc
 # ── 載入 .env（放在所有 st.* 呼叫之前）────────────────────────────────────────
 load_dotenv()
 init_db()   # 初始化 SQLite 持久化資料庫
@@ -66,8 +62,25 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Cookie Controller（持久登入）─────────────────────────────────────────────
-_cookies = _CookieController() if _COOKIES_AVAILABLE else None
+# ── Cookie 寫入 / 刪除（直接注入 JS，不依賴 React 元件生命週期）──────────────
+def _write_cookie(name: str, value: str, max_age: int) -> None:
+    """透過 iframe JS 注入設定瀏覽器 Cookie。"""
+    _stc.html(
+        f"<script>document.cookie="
+        f"'{name}={value}; max-age={max_age}; path=/; SameSite=Lax';"
+        f"</script>",
+        height=0,
+    )
+
+
+def _erase_cookie(name: str) -> None:
+    """透過 iframe JS 注入刪除瀏覽器 Cookie。"""
+    _stc.html(
+        f"<script>document.cookie="
+        f"'{name}=; max-age=0; path=/; SameSite=Lax';"
+        f"</script>",
+        height=0,
+    )
 
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -1013,14 +1026,10 @@ def _run_trailing_stop() -> None:
     st.session_state.agent_log = st.session_state.agent_log[:AGENT_LOG_MAX]
 
 
-# ── Cookie 自動登入（HTTP 層直讀，根治非同步問題）────────────────────────────
-# 根本原因：_cookies.get() 依賴 React 元件回傳，首次渲染時瀏覽器 JS 尚未載入，
-# 必然回傳 None；sleep / spinner / double-render 等手段均無法解決此時間差。
-#
-# 根治方案：改用 st.context.cookies 直接讀取 HTTP 請求的 Cookie 標頭。
-# HTTP Cookie 在每次請求時由瀏覽器自動附帶，首次渲染即可取得，
-# 完全不需要等待前端元件，也不需要 double-render 機制。
-# CookieController 僅保留用於寫入（set）與刪除（remove）Cookie。
+# ── Cookie 自動登入（HTTP 層直讀，JS 注入寫入）──────────────────────────────
+# 讀取：st.context.cookies 從 HTTP 請求標頭直接取得，首次渲染即可用，無需等待。
+# 寫入：_write_cookie() 透過 st.components.v1.html() 注入 JS，
+#       比 React 元件更早執行，不受 st.rerun() 的元件生命週期影響。
 if not st.session_state.get("logged_in", False):
     try:
         _stored_token = st.context.cookies.get(_COOKIE_NAME, "")
@@ -1062,15 +1071,11 @@ if not st.session_state.get("logged_in", False):
                     st.session_state.logged_in  = True
                     st.session_state.user_id    = _uid
                     st.session_state.username   = _username.strip()
-                    if _cookies is not None:
-                        try:
-                            _cookies.set(
-                                _COOKIE_NAME,
-                                _make_auth_token(_uid, _username.strip()),
-                                max_age=_COOKIE_DAYS * 86400,
-                            )
-                        except Exception:
-                            pass
+                    _write_cookie(
+                        _COOKIE_NAME,
+                        _make_auth_token(_uid, _username.strip()),
+                        _COOKIE_DAYS * 86400,
+                    )
                     st.rerun()
                 else:
                     st.error("❌ 帳號或密碼錯誤，請重試。")
@@ -1186,11 +1191,7 @@ with st.sidebar:
 
     st.divider()
     if st.button("🚪 登出指揮中心", width="stretch"):
-        if _cookies is not None:
-            try:
-                _cookies.remove(_COOKIE_NAME)
-            except Exception:
-                pass
+        _erase_cookie(_COOKIE_NAME)
         for _k in ("logged_in", "user_id", "username", "_sandbox_loaded",
                    "virtual_balance", "virtual_positions", "virtual_history_log",
                    "agent_log", "copilot_history", "price_history",

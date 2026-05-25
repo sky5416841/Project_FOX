@@ -1111,8 +1111,14 @@ if not st.session_state.get("logged_in", False):
                 if _reg_pass != _reg_pass2:
                     st.error("❌ 兩次密碼不一致，請重新確認。")
                 else:
+                    # Step 1+2: 驗證欄位 + 寫入 DB（帳號重複/驗證失敗均回傳 _ok=False）
                     _ok, _msg, _token = create_user(_reg_user, _reg_pass, _reg_email)
-                    if _ok and _token:
+                    if not _ok:
+                        # 帳號重複、欄位驗證失敗、DB 寫入失敗——三種情況均在此中斷
+                        # _token 此時必為 None，絕對不呼叫寄信模組
+                        st.error(f"❌ {_msg}")
+                    else:
+                        # Step 3: 確認 INSERT 成功（_ok=True 且 _token 有效）後才寄信
                         _base_url = os.getenv("APP_BASE_URL", "http://localhost:8501")
                         _email_ok, _email_msg = send_verification_email(
                             _reg_email, _reg_user, _token, _base_url
@@ -1124,8 +1130,6 @@ if not st.session_state.get("logged_in", False):
                             st.success(f"✅ {_msg}")
                             st.warning(f"⚠️ 驗證信發送失敗：{_email_msg}\n\n"
                                        f"請聯繫管理員或確認 SMTP 設定。")
-                    elif not _ok:
-                        st.error(f"❌ {_msg}")
     st.stop()
 
 # ── 登入後：按需載入使用者專屬沙盒狀態（每個 browser session 只執行一次）──────

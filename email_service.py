@@ -23,11 +23,14 @@ def send_verification_email(
     回傳 (success, message)。
     SMTP 設定從環境變數讀取：SMTP_EMAIL、SMTP_PASSWORD。
     """
-    smtp_email    = os.getenv("SMTP_EMAIL", "").strip()
-    smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
+    smtp_email    = os.getenv("SMTP_EMAIL",    "").strip()
+    # Gmail 應用程式密碼格式為 "xxxx xxxx xxxx xxxx"，強制移除所有空格
+    smtp_password = os.getenv("SMTP_PASSWORD", "").strip().replace(" ", "")
 
-    if not smtp_email or not smtp_password:
-        return False, "SMTP_EMAIL 或 SMTP_PASSWORD 未設定，請在 .env 中補充。"
+    if not smtp_email:
+        return False, "SMTP_EMAIL 未設定，請在 .env 中補充 Gmail 地址。"
+    if not smtp_password:
+        return False, "SMTP_PASSWORD 未設定，請在 .env 中補充 Gmail 應用程式密碼（16 碼）。"
 
     verify_url = f"{base_url.rstrip('/')}/?token={token}"
 
@@ -140,9 +143,23 @@ def send_verification_email(
             server.login(smtp_email, smtp_password)
             server.sendmail(smtp_email, to_email, msg.as_string())
         return True, f"驗證信已發送至 {to_email}"
-    except smtplib.SMTPAuthenticationError:
-        return False, "SMTP 驗證失敗：請確認 Gmail 帳號已開啟「應用程式密碼」。"
+    except smtplib.SMTPAuthenticationError as e:
+        _code = e.smtp_code
+        _detail = e.smtp_error.decode(errors="ignore") if isinstance(e.smtp_error, bytes) else str(e.smtp_error)
+        return False, (
+            f"SMTP 驗證失敗（{_code}：{_detail}）\n"
+            "請確認：\n"
+            "① Gmail 已開啟兩步驟驗證\n"
+            "② SMTP_PASSWORD 填入的是 16 碼「應用程式密碼」，非 Gmail 登入密碼\n"
+            f"③ 實際送出的密碼長度：{len(smtp_password)} 碼（應為 16）"
+        )
+    except smtplib.SMTPConnectError as e:
+        return False, f"SMTP 連線失敗（{_SMTP_HOST}:{_SMTP_PORT}）：{e}"
+    except smtplib.SMTPRecipientsRefused as e:
+        return False, f"收件地址被拒絕：{e.recipients}"
     except smtplib.SMTPException as e:
-        return False, f"郵件發送失敗：{e}"
+        return False, f"SMTP 錯誤：{type(e).__name__} — {e}"
+    except OSError as e:
+        return False, f"網路連線錯誤：{e}"
     except Exception as e:
-        return False, f"未知錯誤：{e}"
+        return False, f"未知錯誤：{type(e).__name__} — {e}"

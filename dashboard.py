@@ -25,6 +25,19 @@ import streamlit.components.v1 as _stc
 load_dotenv()
 init_db()   # 初始化 SQLite 持久化資料庫
 
+# ── 離線虛擬沙盒模式偵測 ──────────────────────────────────────────────────────
+# 觸發條件（符合任一即進入離線沙盒）：
+#   (a) .env 未填寫 API_KEY / API_SECRET
+#   (b) 環境變數 SANDBOX_MODE=true 強制開啟
+# 離線沙盒效果：
+#   - 僅呼叫公開 API（fetch_tickers / fetch_ohlcv / fetch_ticker）
+#   - 完全攔截 fetch_balance、create_order 等需驗證的私有端點
+#   - 所有交易在本地虛擬錢包 (virtual_balance) 中模擬計算，不觸及真實帳戶
+OFFLINE_SANDBOX: bool = (
+    not bool(os.getenv("API_KEY", "").strip() and os.getenv("API_SECRET", "").strip())
+    or os.getenv("SANDBOX_MODE", "").lower() == "true"
+)
+
 # ── Cookie 驗證常數 ────────────────────────────────────────────────────────────
 _COOKIE_NAME    = "fox_auth"
 _COOKIE_DAYS    = 7
@@ -252,7 +265,7 @@ defaults = {
     "alert_msg":           "",
     "prev_price":          None,
     # ── 虛擬量化沙盒（預設值；登入後由 _sandbox_loaded 機制從存檔覆蓋）─────
-    "virtual_balance":     100_000.0,
+    "virtual_balance":     10_000.0,
     "virtual_positions":   [],
     "virtual_history_log": [],
     "agent_log":           [],
@@ -293,21 +306,28 @@ def get_auth_exchange() -> ccxt.binance | None:
 # ── 帳戶餘額 ──────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=10, show_spinner=False)
 def fetch_account_balance() -> dict | None:
-    """回傳 {'total': float, 'free': float}，失敗回傳 None。"""
+    """回傳 {'total': float, 'free': float}，失敗或沙盒模式回傳 None。"""
+    if OFFLINE_SANDBOX:          # 離線沙盒：攔截私有 API，不送出任何帳戶請求
+        return None
     ex = get_auth_exchange()
     if ex is None:
         return None
-    balance = ex.fetch_balance()
-    usdt = balance.get("USDT", {})
-    return {
-        "total": float(usdt.get("total", 0.0) or 0.0),
-        "free":  float(usdt.get("free",  0.0) or 0.0),
-    }
+    try:
+        balance = ex.fetch_balance()
+        usdt = balance.get("USDT", {})
+        return {
+            "total": float(usdt.get("total", 0.0) or 0.0),
+            "free":  float(usdt.get("free",  0.0) or 0.0),
+        }
+    except (ccxt.AuthenticationError, ccxt.PermissionDenied, ccxt.ExchangeError):
+        return None
 
 # ── 持倉 ──────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=10, show_spinner=False)
 def fetch_real_positions() -> pd.DataFrame | None:
-    """回傳持倉 DataFrame，失敗回傳 None；無倉位回傳空 DataFrame。"""
+    """回傳持倉 DataFrame，失敗或沙盒模式回傳 None；無倉位回傳空 DataFrame。"""
+    if OFFLINE_SANDBOX:          # 離線沙盒：攔截私有 API，不查詢真實持倉
+        return None
     ex = get_auth_exchange()
     if ex is None:
         return None
@@ -1153,7 +1173,7 @@ if not st.session_state._sandbox_loaded:
         try:
             with open(_sf, "r", encoding="utf-8") as _f:
                 _saved = json.load(_f)
-            st.session_state.virtual_balance     = float(_saved.get("virtual_balance",     100_000.0))
+            st.session_state.virtual_balance     = float(_saved.get("virtual_balance",     10_000.0))
             st.session_state.virtual_positions   = list(_saved.get("virtual_positions",     []))
             st.session_state.virtual_history_log = list(_saved.get("virtual_history_log",   []))
         except Exception:
@@ -1177,6 +1197,25 @@ with st.sidebar:
         st.markdown(
             f"<div style='font-size:0.72rem;color:#5B7494;margin-top:-0.5rem'>"
             f"👤 指揮官：<span style='color:#00C2FF'>{_uname}</span></div>",
+            unsafe_allow_html=True,
+        )
+    # ── 沙盒模式徽章 ──────────────────────────────────────────────────────────
+    if OFFLINE_SANDBOX:
+        st.markdown(
+            "<div style='background:rgba(255,180,0,0.12);border:1px solid rgba(255,180,0,0.4);"
+            "border-radius:6px;padding:0.45rem 0.7rem;margin-top:0.4rem;font-size:0.72rem;"
+            "color:#FFD700;font-weight:700'>"
+            "🟡 離線虛擬沙盒模式<br>"
+            "<span style='font-weight:400;color:#B8A040'>API Key 未設定 · 僅使用公開端點<br>"
+            "私有 API 已攔截 · 本地虛擬錢包運作中</span></div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            "<div style='background:rgba(0,194,255,0.08);border:1px solid rgba(0,194,255,0.25);"
+            "border-radius:6px;padding:0.45rem 0.7rem;margin-top:0.4rem;font-size:0.72rem;"
+            "color:#00C2FF;font-weight:700'>"
+            "🔵 真實 API 已綁定</div>",
             unsafe_allow_html=True,
         )
     st.divider()
@@ -1224,13 +1263,13 @@ with st.sidebar:
     with st.expander("⚠️ 危險操作區", expanded=False):
         st.markdown(
             "<div style='font-size:0.75rem;color:#FF4B4B;margin-bottom:0.5rem'>"
-            "此操作將清空所有持倉與歷史紀錄，並將餘額重置為 100,000 USDT，<b>無法撤銷</b>。</div>",
+            "此操作將清空所有持倉與歷史紀錄，並將餘額重置為 10,000 USDT，<b>無法撤銷</b>。</div>",
             unsafe_allow_html=True,
         )
         if st.button("🔄 重置沙盒 (清空持倉與歷史)", width="stretch", type="primary"):
             st.session_state.virtual_positions   = []
             st.session_state.virtual_history_log = []
-            st.session_state.virtual_balance     = 100_000.0
+            st.session_state.virtual_balance     = 10_000.0
             save_state()
             st.rerun()
 
@@ -1383,7 +1422,7 @@ def frag_ticker() -> None:
     _m1, _m2, _m3, _m4 = st.columns(4)
     with _m1:
         if _api_unbound:
-            _es, _ecls = "未綁定 API Key", "val-white"
+            _es, _ecls = ("離線沙盒模式" if OFFLINE_SANDBOX else "未綁定 API Key"), "val-white"
         elif _equity is not None:
             _es, _ecls = f"${_equity:>12,.2f}", "val-cyan"
         else:
@@ -1393,7 +1432,7 @@ def frag_ticker() -> None:
                     f'<div class="metric-sub">帳戶總資產 (USDT)</div></div>', unsafe_allow_html=True)
     with _m2:
         if _api_unbound:
-            _fs, _fcls = "未綁定 API Key", "val-white"
+            _fs, _fcls = ("虛擬錢包運作中" if OFFLINE_SANDBOX else "未綁定 API Key"), "val-white"
         elif _free is not None:
             _fs, _fcls = f"${_free:>12,.2f}", "val-white"
         else:

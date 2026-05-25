@@ -65,6 +65,18 @@ Project F.O.X. 不是價格提醒工具，而是一套具備**完整交易生命
 - **Phase 2**：Top 30 逐一取 K 線，0.1s 限速防封鎖，計算 RSI(14) / CCI(14) / ATR(14) + 資金費率
 - **快取**：`@st.cache_data` TTL=20s，避免重複 API 呼叫
 
+### 🟡 離線虛擬沙盒模式（無需 API Key）
+
+F.O.X. 可在**完全不填寫 Binance API Key** 的情況下運行完整的回測流程：
+
+| 機制 | 說明 |
+|------|------|
+| **自動偵測** | `.env` 未填 `API_KEY` / `API_SECRET`，或設定 `SANDBOX_MODE=true`，即啟用離線沙盒 |
+| **公開 API 保留** | `fetch_tickers` / `fetch_ohlcv` / `fetch_ticker` 照常執行，取得真實市場行情 |
+| **私有 API 攔截** | `fetch_balance` / `fetch_positions` 在沙盒模式下直接回傳 `None`，完全不送出請求，杜絕 `-2015 Invalid API-key` 錯誤 |
+| **本地虛擬錢包** | 初始資金 **10,000 USDT**，開倉 / 停利 / 爆倉結算全在本地變數進行，不觸碰真實帳戶 |
+| **UI 徽章** | Sidebar 顯示金黃色「🟡 離線虛擬沙盒模式」提示；真實 API 綁定時切換為藍色 |
+
 ### 🎯 AI 共振評分引擎（0–100）
 
 | 評分區間 | 倉位倍率 | 標籤 |
@@ -127,9 +139,12 @@ pip install -r requirements.txt
 建立 `.env`：
 
 ```env
-# Binance API（選用：不填仍可使用公開報價與虛擬沙盒）
+# Binance API（選用：不填即進入離線虛擬沙盒，只呼叫公開 API）
 API_KEY=your_binance_api_key
 API_SECRET=your_binance_api_secret
+
+# 強制離線沙盒模式（true / false，預設 false）
+# SANDBOX_MODE=true
 
 # Gemini API（選用：不填則 AI 副駕「狐影」離線）
 GEMINI_API_KEY=your_gemini_api_key
@@ -162,6 +177,7 @@ flowchart TD
     subgraph CCXT 接口層
         C[公開報價 get_exchange]
         D[帳戶認證 get_auth_exchange]
+        SB{OFFLINE_SANDBOX?}
     end
 
     subgraph 核心引擎
@@ -189,7 +205,8 @@ flowchart TD
     end
 
     A --> C --> E --> F --> H
-    A --> D --> N
+    A --> SB -- API Key 已設定 --> D --> N
+    SB -- 未設定/SANDBOX_MODE --> N
     E --> G
     F --> I
     G --> I
@@ -296,6 +313,7 @@ CREATE TABLE trade_history (
 | Phase 8 | K 線完全體：Candlestick + MA7/MA25 + 成交量副圖 + UTC+8 修正 |
 | Phase 9 | Cookie 保持登入：HMAC-SHA256 Token，7 天免登入，登出清除 |
 | Phase 10 | Docker 容器化：Multi-stage build，Named Volume 持久化，`FOX_DATA_DIR` 環境隔離 |
+| Phase 11 | 離線虛擬沙盒模式：`OFFLINE_SANDBOX` 旗標自動偵測，私有 API 硬性攔截，虛擬錢包 10,000 USDT |
 
 ---
 

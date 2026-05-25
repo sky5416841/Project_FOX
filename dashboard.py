@@ -230,7 +230,6 @@ defaults = {
     "user_id":             0,
     "username":            "",
     "_sandbox_loaded":     False,       # 登入後才從存檔載入一次
-    "_cookie_checked":     False,       # F5 後第一次 Cookie 等待是否已完成
     "selected_symbol":     "BTC/USDT",
     "selected_timeframe":  "15m",
     "price_history":       [],
@@ -1014,50 +1013,27 @@ def _run_trailing_stop() -> None:
     st.session_state.agent_log = st.session_state.agent_log[:AGENT_LOG_MAX]
 
 
-# ── Cookie 自動登入（等待機制版）─────────────────────────────────────────────
-# 問題根因：Streamlit 後端執行速度遠快於瀏覽器 Cookie JS 載入，首次渲染時
-# _cookies.get() 必然回傳 None。
+# ── Cookie 自動登入（HTTP 層直讀，根治非同步問題）────────────────────────────
+# 根本原因：_cookies.get() 依賴 React 元件回傳，首次渲染時瀏覽器 JS 尚未載入，
+# 必然回傳 None；sleep / spinner / double-render 等手段均無法解決此時間差。
 #
-# 解法：_cookie_checked 旗標區分「首次」與「後續」渲染。
-#   首次（_cookie_checked=False）：顯示 spinner + sleep(0.4s)，給予瀏覽器
-#     足夠時間傳回 Cookie 數據，讀取後無論結果皆 st.rerun()。
-#   後續（_cookie_checked=True）：直接讀取，已有結果就設 session state + rerun，
-#     沒有結果就落入下方登入牆。
-if not st.session_state.get("logged_in", False) and _cookies is not None:
-    if not st.session_state.get("_cookie_checked", False):
-        # ── 首次：等待瀏覽器 Cookie 元件回傳數據 ──────────────────────────
-        _ph = st.empty()
-        with _ph:
-            with st.spinner("驗證指揮官憑證中..."):
-                time.sleep(0.4)   # 給予前端 JS 足夠的毫秒數傳回 Cookie
-        _ph.empty()
-        st.session_state._cookie_checked = True
-        try:
-            _stored_token = _cookies.get(_COOKIE_NAME)
-            if _stored_token:
-                _result = _verify_auth_token(str(_stored_token))
-                if _result is not None:
-                    _c_uid, _c_uname = _result
-                    st.session_state.logged_in = True
-                    st.session_state.user_id   = _c_uid
-                    st.session_state.username  = _c_uname
-        except Exception:
-            pass
-        st.rerun()   # 無論是否有 Cookie，皆 rerun 確保狀態從頭一致
-    else:
-        # ── 後續：_cookie_checked=True 但 logged_in 仍 False，補撈一次 ──
-        try:
-            _stored_token = _cookies.get(_COOKIE_NAME)
-            if _stored_token:
-                _result = _verify_auth_token(str(_stored_token))
-                if _result is not None:
-                    _c_uid, _c_uname = _result
-                    st.session_state.logged_in = True
-                    st.session_state.user_id   = _c_uid
-                    st.session_state.username  = _c_uname
-                    st.rerun()
-        except Exception:
-            pass   # 靜默降級，落入下方登入牆
+# 根治方案：改用 st.context.cookies 直接讀取 HTTP 請求的 Cookie 標頭。
+# HTTP Cookie 在每次請求時由瀏覽器自動附帶，首次渲染即可取得，
+# 完全不需要等待前端元件，也不需要 double-render 機制。
+# CookieController 僅保留用於寫入（set）與刪除（remove）Cookie。
+if not st.session_state.get("logged_in", False):
+    try:
+        _stored_token = st.context.cookies.get(_COOKIE_NAME, "")
+        if _stored_token:
+            _result = _verify_auth_token(_stored_token)
+            if _result is not None:
+                _c_uid, _c_uname = _result
+                st.session_state.logged_in = True
+                st.session_state.user_id   = _c_uid
+                st.session_state.username  = _c_uname
+                st.rerun()   # 確保所有 Fragment 以 logged_in=True 重新初始化
+    except Exception:
+        pass   # st.context.cookies 不可用時靜默降級，使用者手動登入
 
 # ── 登入攔截牆 (Multi-user SaaS) ─────────────────────────────────────────────
 if not st.session_state.get("logged_in", False):
@@ -1216,7 +1192,6 @@ with st.sidebar:
             except Exception:
                 pass
         for _k in ("logged_in", "user_id", "username", "_sandbox_loaded",
-                   "_cookie_checked",
                    "virtual_balance", "virtual_positions", "virtual_history_log",
                    "agent_log", "copilot_history", "price_history",
                    "alert_active", "alert_msg", "prev_price"):

@@ -1040,6 +1040,20 @@ if _email_token:
     else:
         st.error("❌ **驗證連結無效或已使用。** 請重新註冊或聯繫管理員。")
 
+# ── 兩段式登出：清除 Cookie JS 與登入牆在同一次渲染執行 ─────────────────────
+# 登出按鈕只設 _logout_pending=True 後 rerun；
+# 下一次渲染從這裡接手：注入刪除 Cookie 的 iframe JS，
+# 再清除 session state，最後自然落入登入攔截牆。
+# 這樣可確保 JS iframe 不會被緊接的 st.rerun() 替換掉而漏刪 Cookie。
+if st.session_state.pop("_logout_pending", False):
+    _erase_cookie(_COOKIE_NAME)
+    for _k in ("logged_in", "user_id", "username", "_sandbox_loaded",
+               "virtual_balance", "virtual_positions", "virtual_history_log",
+               "agent_log", "copilot_history", "price_history",
+               "alert_active", "alert_msg", "prev_price"):
+        st.session_state.pop(_k, None)
+    # 不再呼叫 st.rerun()——直接讓此次渲染繼續顯示登入牆
+
 # ── Cookie 自動登入（HTTP 層直讀，JS 注入寫入）──────────────────────────────
 # 讀取：st.context.cookies 從 HTTP 請求標頭直接取得，首次渲染即可用，無需等待。
 # 寫入：_write_cookie() 透過 st.components.v1.html() 注入 JS，
@@ -1222,12 +1236,9 @@ with st.sidebar:
 
     st.divider()
     if st.button("🚪 登出指揮中心", width="stretch"):
-        _erase_cookie(_COOKIE_NAME)
-        for _k in ("logged_in", "user_id", "username", "_sandbox_loaded",
-                   "virtual_balance", "virtual_positions", "virtual_history_log",
-                   "agent_log", "copilot_history", "price_history",
-                   "alert_active", "alert_msg", "prev_price"):
-            st.session_state.pop(_k, None)
+        # 設旗標後 rerun；實際清除 Cookie 的 JS 在下一次渲染頂端執行，
+        # 確保 iframe JS 與登入牆出現在同一次渲染，不被提前替換。
+        st.session_state["_logout_pending"] = True
         st.rerun()
 
 # ── 幣種切換偵測：清空走勢快取 + 重置警報 + 讓 slider 回到新幣種預設值 ───────

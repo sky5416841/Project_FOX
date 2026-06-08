@@ -71,7 +71,7 @@ def init_db() -> None:
             # ── trade_history 遷移：補齊 user_id ───────────────────────────
             th_cols = [row[1] for row in conn.execute("PRAGMA table_info(trade_history)").fetchall()]
             if "user_id" not in th_cols:
-                conn.execute("ALTER TABLE users ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+                conn.execute("ALTER TABLE trade_history ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
 
             # ── users 遷移：補齊 email / is_verified / verification_token ──
             u_cols = [row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()]

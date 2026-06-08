@@ -130,7 +130,18 @@ def _is_safe_sql(sql: str) -> bool:
     for kw in forbidden:
         if re.search(rf"\b{kw}\b", cleaned):
             return False
+    # 多語句注入防護：禁止句中分號（尾端分號允許）
+    if ";" in cleaned.rstrip().rstrip(";"):
+        return False
     return True
+
+
+def _enforces_user_id(sql: str, user_id: int) -> bool:
+    """強制資料隔離：SQL 必須含 `user_id = <本人id>` 條件，否則拒絕執行。
+
+    不依賴 LLM 自願加上過濾，從程式端硬性把關，杜絕跨使用者資料外洩。
+    """
+    return bool(re.search(rf"\buser_id\s*=\s*{int(user_id)}\b", sql))
 
 
 def _execute_sql(sql: str) -> tuple[list[dict[str, Any]], str | None]:
@@ -198,6 +209,11 @@ def ask_copilot(user_question: str, user_id: int = 0) -> str:
             "🚫 **安全攔截**：偵測到非 SELECT 語句，已拒絕執行。\n"
             "副駕只允許資料查詢操作，無法執行寫入或破壞性指令。"
         )
+    if not _enforces_user_id(sql, user_id):
+        return (
+            "🚫 **安全攔截**：查詢未包含本帳號的資料隔離條件，已拒絕執行。\n"
+            "為保護資料安全，副駕僅能查詢您自己的交易紀錄。請換個方式描述問題再試一次。"
+        )
 
     # ── Step 4：執行 SQL，失敗時帶錯誤訊息讓 Gemini 修正並重試 ────────────
     rows, error = _execute_sql(sql)
@@ -216,7 +232,7 @@ def ask_copilot(user_question: str, user_id: int = 0) -> str:
         except Exception as e:
             return f"⚠️ SQL 修正失敗：{e}"
 
-        if not _is_safe_sql(sql):
+        if not _is_safe_sql(sql) or not _enforces_user_id(sql, user_id):
             return "🚫 修正後的 SQL 仍不符合安全規則，已拒絕執行。"
 
         rows, error = _execute_sql(sql)

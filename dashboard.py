@@ -252,6 +252,7 @@ def save_state() -> None:
 
 
 # ── Session state init ────────────────────────────────────────────────────────
+INITIAL_BALANCE = 10_000.0   # 虛擬沙盒初始資金（報酬率 / 淨值曲線基準）
 defaults = {
     "logged_in":           False,
     "user_id":             0,
@@ -265,7 +266,7 @@ defaults = {
     "alert_msg":           "",
     "prev_price":          None,
     # ── 虛擬量化沙盒（預設值；登入後由 _sandbox_loaded 機制從存檔覆蓋）─────
-    "virtual_balance":     10_000.0,
+    "virtual_balance":     INITIAL_BALANCE,
     "virtual_positions":   [],
     "virtual_history_log": [],
     "agent_log":           [],
@@ -378,6 +379,9 @@ def fetch_ohlcv_data(symbol: str, timeframe: str, limit: int = 100) -> tuple[pd.
 
 # ── Beep ──────────────────────────────────────────────────────────────────────
 def beep() -> None:
+    # Beep 為 Windows 專屬 API；Linux/Docker 環境直接略過，避免無謂例外
+    if os.name != "nt":
+        return
     try:
         ctypes.windll.kernel32.Beep(1200, 300)
         ctypes.windll.kernel32.Beep(900,  500)
@@ -1173,7 +1177,7 @@ if not st.session_state._sandbox_loaded:
         try:
             with open(_sf, "r", encoding="utf-8") as _f:
                 _saved = json.load(_f)
-            st.session_state.virtual_balance     = float(_saved.get("virtual_balance",     10_000.0))
+            st.session_state.virtual_balance     = float(_saved.get("virtual_balance",     INITIAL_BALANCE))
             st.session_state.virtual_positions   = list(_saved.get("virtual_positions",     []))
             st.session_state.virtual_history_log = list(_saved.get("virtual_history_log",   []))
         except Exception:
@@ -1269,7 +1273,7 @@ with st.sidebar:
         if st.button("🔄 重置沙盒 (清空持倉與歷史)", width="stretch", type="primary"):
             st.session_state.virtual_positions   = []
             st.session_state.virtual_history_log = []
-            st.session_state.virtual_balance     = 10_000.0
+            st.session_state.virtual_balance     = INITIAL_BALANCE
             save_state()
             st.rerun()
 
@@ -1924,7 +1928,7 @@ def frag_cfo_room() -> None:
     _mc3.metric(
         "💰 總淨利 (Net PnL)",
         f"${_net_pnl:+,.2f}",
-        f"{(_net_pnl / 100_000.0 * 100):+.2f}% 報酬率",
+        f"{(_net_pnl / INITIAL_BALANCE * 100):+.2f}% 報酬率",
     )
     _mc4.metric(
         "⚖️ 盈虧比 (Profit Factor)",
@@ -1944,7 +1948,7 @@ def frag_cfo_room() -> None:
 
     _sorted_closed = sorted(_all_closed, key=_sort_key)
 
-    _INITIAL = 100_000.0
+    _INITIAL = INITIAL_BALANCE
     _equity  = _INITIAL
     _curve_rows = [{"交易筆次": 0, "資金淨值 (USDT)": _equity}]
     for _i, _p in enumerate(_sorted_closed, start=1):
@@ -1954,7 +1958,7 @@ def frag_cfo_room() -> None:
     _curve_df = pd.DataFrame(_curve_rows).set_index("交易筆次")
     st.line_chart(_curve_df, width="stretch", height=220)
     st.caption(
-        f"基準：初始資金 $100,000 USDT · 共 {_total} 筆已結算 · "
+        f"基準：初始資金 ${INITIAL_BALANCE:,.0f} USDT · 共 {_total} 筆已結算 · "
         f"最新淨值 ${_equity:,.2f} · 更新：{datetime.now().strftime('%H:%M:%S')}"
     )
 
@@ -1974,7 +1978,7 @@ with _tab1:
     st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
     _col_left, _col_right = st.columns([6, 4])
     with _col_left:
-        frag_chart()        # BTC 即時走勢圖 (5s)
+        frag_chart()        # 完全體看盤終端 K 線 (60s)
     with _col_right:
         frag_brain()        # 風控大腦 + AI 決策日誌 (10s)
 
@@ -2170,4 +2174,4 @@ with _tab4:
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────
 st.markdown("---")
-st.caption("Project F.O.X. © 2026 · 僅供參考，非投資建議 · 各區塊獨立刷新（5s / 10s / 20s）")
+st.caption("Project F.O.X. © 2026 · 僅供參考，非投資建議 · 各區塊獨立刷新（5s / 10s / 15s / 20s / 60s）")

@@ -2201,19 +2201,25 @@ with _tab4:
         "💡 快捷詢問</div>",
         unsafe_allow_html=True,
     )
+    # ── 複盤分析快捷問題（找出負期望值的開倉條件）────────────────────────
     _preset_questions = [
-        "幫我統計整體勝率和總盈虧",
-        "哪個幣種的總盈虧最高？",
-        "列出所有虧損超過 100 USDT 的交易",
-        "共振評分高於 80 的交易，勝率和平均盈虧如何？",
-        "各平倉原因（停利/爆倉/手動）的次數與總盈虧統計",
+        "各平倉原因的次數、勝率與總盈虧統計",
+        "做多與做空分開，各自的勝率和期望值（平均盈虧）",
+        "依趨勢偏離分強下跌(<-3%)、盤整、強上升(>3%)三組，做多的平均盈虧與勝率",
+        "共振評分分成 <60、60-79、80+ 三層，各層的勝率和平均盈虧",
+        "做多交易按 RSI 分 <15、15-20、20-25、25-30 四桶，各桶平均盈虧",
+        "不同槓桿倍數的爆倉次數佔比和平均盈虧",
+        "每個幣種的總盈虧與交易次數，由賠最多排到賺最多（至少3筆）",
     ]
-    _preset_cols = st.columns(len(_preset_questions))
     _preset_clicked: str | None = None
-    for _ci, (_col_p, _q) in enumerate(zip(_preset_cols, _preset_questions)):
-        with _col_p:
-            if st.button(_q, key=f"preset_{_ci}", width="stretch"):
-                _preset_clicked = _q
+    # 每列最多 4 顆按鈕，避免一列擠太多
+    for _row_start in range(0, len(_preset_questions), 4):
+        _row_qs = _preset_questions[_row_start:_row_start + 4]
+        _preset_cols = st.columns(len(_row_qs))
+        for _ci, (_col_p, _q) in enumerate(zip(_preset_cols, _row_qs)):
+            with _col_p:
+                if st.button(_q, key=f"preset_{_row_start + _ci}", width="stretch"):
+                    _preset_clicked = _q
 
     st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
 

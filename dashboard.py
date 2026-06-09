@@ -21,9 +21,11 @@ from database import init_db, insert_trade, create_user, verify_user, verify_ema
 from ai_copilot import ask_copilot
 from email_service import send_verification_email
 import streamlit.components.v1 as _stc
+import engine_core   # 背景常駐交易引擎（與瀏覽器分頁解耦）
 # ── 載入 .env（放在所有 st.* 呼叫之前）────────────────────────────────────────
 load_dotenv()
 init_db()   # 初始化 SQLite 持久化資料庫
+engine_core.start_background_engine()   # 啟動背景交易引擎（冪等，只會啟動一次）
 
 # ── 離線虛擬沙盒模式偵測 ──────────────────────────────────────────────────────
 # 觸發條件（符合任一即進入離線沙盒）：
@@ -236,19 +238,39 @@ def _user_state_path(user_id: int) -> str:
     return os.path.join(_STATE_DIR, f"fox_sandbox_state_{user_id}.json")
 
 
+_SETTINGS_KEYS = ("auto_trade_enabled", "trend_filter_enabled",
+                  "sniper_leverage", "sniper_margin", "sniper_max_pos", "sniper_loss_cooldown")
+
+
 def save_state() -> None:
-    """將虛擬沙盒狀態寫入使用者專屬 JSON 存檔（靜默執行）。"""
-    try:
-        _uid = st.session_state.get("user_id", 0)
-        payload = {
-            "virtual_balance":     st.session_state.virtual_balance,
-            "virtual_positions":   st.session_state.virtual_positions,
-            "virtual_history_log": st.session_state.get("virtual_history_log", []),
-        }
-        with open(_user_state_path(_uid), "w", encoding="utf-8") as _f:
-            json.dump(payload, _f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    """將虛擬沙盒狀態寫入存檔（透過 engine_core 加鎖，與背景引擎協調）。"""
+    _uid = st.session_state.get("user_id", 0)
+    engine_core.save_state(_uid, {
+        "virtual_balance":     st.session_state.virtual_balance,
+        "virtual_positions":   st.session_state.virtual_positions,
+        "virtual_history_log": st.session_state.get("virtual_history_log", []),
+        "agent_log":           st.session_state.get("agent_log", []),
+    })
+
+
+def _reload_sandbox_from_file() -> None:
+    """從存檔重新載入沙盒狀態到 session（背景引擎是真相來源，UI 只是檢視器）。"""
+    _uid = st.session_state.get("user_id", 0)
+    _data = engine_core.load_state(_uid)
+    if _data:
+        st.session_state.virtual_balance     = float(_data.get("virtual_balance", INITIAL_BALANCE))
+        st.session_state.virtual_positions   = list(_data.get("virtual_positions", []))
+        st.session_state.virtual_history_log = list(_data.get("virtual_history_log", []))
+        st.session_state.agent_log           = list(_data.get("agent_log", []))
+
+
+def _persist_settings() -> None:
+    """把目前的引擎設定寫到設定檔，供背景引擎讀取（即使分頁關閉也照用最後設定）。"""
+    _uid = st.session_state.get("user_id", 0)
+    engine_core.save_settings(_uid, {
+        k: st.session_state.get(k) for k in _SETTINGS_KEYS
+        if st.session_state.get(k) is not None
+    })
 
 
 # ── Session state init ────────────────────────────────────────────────────────
@@ -1216,16 +1238,21 @@ if not st.session_state.get("logged_in", False):
 
 # ── 登入後：按需載入使用者專屬沙盒狀態（每個 browser session 只執行一次）──────
 if not st.session_state._sandbox_loaded:
-    _sf = _user_state_path(st.session_state.user_id)
-    if os.path.exists(_sf):
-        try:
-            with open(_sf, "r", encoding="utf-8") as _f:
-                _saved = json.load(_f)
-            st.session_state.virtual_balance     = float(_saved.get("virtual_balance",     INITIAL_BALANCE))
-            st.session_state.virtual_positions   = list(_saved.get("virtual_positions",     []))
-            st.session_state.virtual_history_log = list(_saved.get("virtual_history_log",   []))
-        except Exception:
-            pass
+    _uid0 = st.session_state.user_id
+    # 1) 還原引擎設定（須先於 sidebar 元件建立，才能讓開關記住上次狀態）
+    _saved_settings = engine_core.load_settings(_uid0) or {}
+    for _k in _SETTINGS_KEYS:
+        if _k in _saved_settings and _saved_settings[_k] is not None:
+            st.session_state[_k] = _saved_settings[_k]
+    # 2) 還原沙盒狀態
+    _saved = engine_core.load_state(_uid0)
+    if _saved:
+        st.session_state.virtual_balance     = float(_saved.get("virtual_balance",     INITIAL_BALANCE))
+        st.session_state.virtual_positions   = list(_saved.get("virtual_positions",     []))
+        st.session_state.virtual_history_log = list(_saved.get("virtual_history_log",   []))
+        st.session_state.agent_log           = list(_saved.get("agent_log",             []))
+    else:
+        save_state()   # 首次登入無存檔 → 建立初始存檔，讓背景引擎能接手管理
     st.session_state._sandbox_loaded = True
 
 # ── 幣種別警報線設定表（min / max / default / step / format）────────────────
@@ -1320,7 +1347,11 @@ with st.sidebar:
                     min_value=0, max_value=1440,
                     value=120, step=10, key="sniper_loss_cooldown")
 
+    # 把目前設定寫到設定檔，供背景引擎讀取（分頁關閉後仍照最後設定運行）
+    _persist_settings()
+
     st.divider()
+    st.caption("🛰️ 背景引擎常駐運行 · 不依賴分頁")
     st.caption("⚡ 各區塊獨立刷新：5s / 10s / 15s")
     st.caption("📡 資料來源：Binance Futures")
 
@@ -1339,6 +1370,7 @@ with st.sidebar:
         if st.button("🔄 重置沙盒 (清空持倉與歷史)", width="stretch", type="primary"):
             st.session_state.virtual_positions   = []
             st.session_state.virtual_history_log = []
+            st.session_state.agent_log           = []
             st.session_state.virtual_balance     = INITIAL_BALANCE
             save_state()
             st.rerun()
@@ -1382,22 +1414,15 @@ st.markdown(
 # ── Fragment 1：沙盒引擎 (15s) ─────────────────────────────────────────────
 @st.fragment(run_every=15)
 def frag_sandbox() -> None:
-    # ── 引擎心跳：任何網路或解析異常都不中斷 UI 刷新 ──────────────────────
+    # ── 引擎已移至背景常駐執行緒；此處只從存檔重載最新狀態來顯示 ──────────
+    _reload_sandbox_from_file()
     _auto_on = st.session_state.get("auto_trade_enabled", False)
-    try:
-        _sdf, _ = fetch_scanner_data()
-        if _auto_on:               # 自動交易開關開啟時才會開新倉
-            _run_sniper(_sdf)
-        _update_mark_prices(_sdf)  # 持倉標記價更新（無論開關狀態都執行）
-        _run_trailing_stop()       # 移動停利結算引擎（讓既有倉位持續被管理）
-    except Exception as _ex:
-        print(f"[FOX][WARN] frag_sandbox 引擎心跳異常（已攔截，UI 繼續）→ {_ex}")
 
     # ── 引擎狀態徽章 ──────────────────────────────────────────────────────
     if _auto_on:
         _eng_badge = ("<span style='font-size:0.78rem;color:#00FF88;font-weight:600;"
                       "background:rgba(0,255,136,0.12);border:1px solid rgba(0,255,136,0.35);"
-                      "border-radius:4px;padding:0.15rem 0.5rem'>🟢 自動交易 ON · 狙擊引擎運轉中</span>")
+                      "border-radius:4px;padding:0.15rem 0.5rem'>🟢 自動交易 ON · 背景引擎運轉中（不依賴分頁）</span>")
     else:
         _eng_badge = ("<span style='font-size:0.78rem;color:#FF8C00;font-weight:600;"
                       "background:rgba(255,140,0,0.12);border:1px solid rgba(255,140,0,0.35);"
@@ -1764,6 +1789,7 @@ def frag_scanner() -> None:
 # ── Fragment 5：F.O.X. 風控大腦 + AI 決策日誌 (10s) ───────────────────────
 @st.fragment(run_every=10)
 def frag_brain() -> None:
+    _reload_sandbox_from_file()   # 取背景引擎最新決策日誌
     st.markdown('<div class="section-header">🧠 F.O.X. 風控大腦</div>', unsafe_allow_html=True)
     try: _pdf = fetch_real_positions()
     except Exception: _pdf = None
@@ -1832,6 +1858,7 @@ def frag_real_positions() -> None:
 # ── Fragment 7：虛擬持倉表（Open + Closed 分開顯示） (5s) ─────────────────
 @st.fragment(run_every=5)
 def frag_virtual_positions() -> None:
+    _reload_sandbox_from_file()   # 取背景引擎最新持倉
     st.markdown(
         "#### 🎮 虛擬持倉紀錄 &nbsp;"
         "<span style='font-size:0.78rem;color:#B8860B;font-weight:500;"
@@ -1967,6 +1994,7 @@ def frag_virtual_positions() -> None:
 # ── Fragment 8：CFO 戰情分析室（資金統計 + 淨值曲線）(15s) ─────────────────
 @st.fragment(run_every=15)
 def frag_cfo_room() -> None:
+    _reload_sandbox_from_file()   # 取背景引擎最新結算資料
     st.markdown(
         "#### 📊 CFO 戰情分析室 &nbsp;"
         "<span style='font-size:0.78rem;color:#00C2FF;font-weight:500;"
@@ -2091,6 +2119,7 @@ with _tab3:
     # ── 緊急手動覆蓋平倉（直接渲染，不入 fragment，避免 run_every 重置 selectbox）
     st.markdown("<div style='margin-top:1rem'></div>", unsafe_allow_html=True)
     with st.expander("🔴 緊急手動平倉 (Manual Override)", expanded=False):
+        _reload_sandbox_from_file()   # 取背景引擎最新持倉，避免對已平倉的倉位操作
         _mo_open = [p for p in st.session_state.virtual_positions
                     if p.get("status", "Open") == "Open"]
         if not _mo_open:

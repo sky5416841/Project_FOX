@@ -1703,7 +1703,11 @@ def frag_scanner() -> None:
     with st.expander("🌐 全網廣域雷達　(Top 30 高波動活躍榜 · 兩段式掃描 · RSI + CCI 14)", expanded=True):
         _sdf, _serr = fetch_scanner_data()
         if _serr:
-            st.error(f"❌ 廣域雷達錯誤：{_serr}")
+            # 網路閃斷 / Rate Limit 屬暫時性問題，20 秒後自動重試 → 顯示溫和提示而非紅字錯誤
+            if ("網路" in _serr) or ("Rate Limit" in _serr) or ("NetworkError" in _serr):
+                st.info("📡 與 Binance 連線暫時不穩，20 秒後自動重試…（資料來源閃斷，非系統錯誤）")
+            else:
+                st.error(f"❌ 廣域雷達錯誤：{_serr}")
         elif _sdf.empty:
             st.info("📡 兩段式掃描中，請稍候…（首次載入約需 10–20 秒）")
         else:

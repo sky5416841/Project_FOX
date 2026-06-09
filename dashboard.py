@@ -322,7 +322,9 @@ def fetch_account_balance() -> dict | None:
             "total": float(usdt.get("total", 0.0) or 0.0),
             "free":  float(usdt.get("free",  0.0) or 0.0),
         }
-    except (ccxt.AuthenticationError, ccxt.PermissionDenied, ccxt.ExchangeError):
+    except Exception:
+        # 此函式被側欄徽章等「不能出錯」的地方直接呼叫，
+        # 任何錯誤（認證 / 網路閃斷 / 交易所異常）都安靜回 None，絕不向上拋例外。
         return None
 
 # ── 持倉 ──────────────────────────────────────────────────────────────────────
@@ -336,8 +338,8 @@ def fetch_real_positions() -> pd.DataFrame | None:
         return None
     try:
         raw = ex.fetch_positions()
-    except (ccxt.AuthenticationError, ccxt.PermissionDenied, ccxt.ExchangeError):
-        # 金鑰無效（-2015 等）/ 權限不足：視為未綁定，回 None 讓 UI 顯示「未綁定」
+    except Exception:
+        # 金鑰無效（-2015 等）/ 權限不足 / 網路閃斷：一律視為取不到，回 None 讓 UI 顯示「未綁定」
         return None
     active = [p for p in raw if (p.get("contracts") or 0) != 0]
     if not active:

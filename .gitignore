@@ -24,3 +24,7 @@ build/
 # ── 系統檔案 ──────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# Streamlit 執行期 log
+run_out.log
+run_err.log

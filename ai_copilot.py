@@ -33,6 +33,12 @@ _SCHEMA_DESCRIPTION = """
   pnl          REAL      已實現盈虧（USDT）；正 = 獲利，負 = 損失
   score        INTEGER   AI 共振評分 0–100；越高信號品質越強
   exit_reason  TEXT      平倉原因：'移動停利'、'動態停損'、'爆倉'、'手動平倉'
+  rsi          REAL      開倉當下 RSI(15m)；做多信號通常 < 30（超賣）
+  cci          REAL      開倉當下 CCI(14)；做空信號通常 > 250（超買）
+  vol_surge    REAL      開倉當下量能爆發 (%)，相對前 5 根均量
+  trend_gap    REAL      開倉當下趨勢偏離 (%)，MA10 相對 MA50；負=下跌趨勢，正=上升趨勢
+  leverage     INTEGER   開倉槓桿倍數
+  （註：rsi/cci/vol_surge/trend_gap/leverage 為較新欄位，舊紀錄可能為 0，分析時可用 != 0 過濾）
 
 計算定義：
   勝率 = COUNT(pnl > 0) / COUNT(*)

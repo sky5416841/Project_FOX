@@ -57,9 +57,23 @@ CREATE TABLE IF NOT EXISTS trade_history (
     exit_price   REAL    NOT NULL,
     pnl          REAL    NOT NULL,
     score        INTEGER NOT NULL,
-    exit_reason  TEXT    NOT NULL
+    exit_reason  TEXT    NOT NULL,
+    rsi          REAL    NOT NULL DEFAULT 0,
+    cci          REAL    NOT NULL DEFAULT 0,
+    vol_surge    REAL    NOT NULL DEFAULT 0,
+    trend_gap    REAL    NOT NULL DEFAULT 0,
+    leverage     INTEGER NOT NULL DEFAULT 0
 )
 """
+
+# 開倉 context 欄位（供未來離線複盤分析負期望值的條件組合）
+_TRADE_CONTEXT_COLS = {
+    "rsi":       "REAL    NOT NULL DEFAULT 0",
+    "cci":       "REAL    NOT NULL DEFAULT 0",
+    "vol_surge": "REAL    NOT NULL DEFAULT 0",
+    "trend_gap": "REAL    NOT NULL DEFAULT 0",
+    "leverage":  "INTEGER NOT NULL DEFAULT 0",
+}
 
 
 def init_db() -> None:
@@ -72,6 +86,11 @@ def init_db() -> None:
             th_cols = [row[1] for row in conn.execute("PRAGMA table_info(trade_history)").fetchall()]
             if "user_id" not in th_cols:
                 conn.execute("ALTER TABLE trade_history ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+
+            # ── trade_history 遷移：補齊開倉 context 欄位 ──────────────────
+            for _col, _decl in _TRADE_CONTEXT_COLS.items():
+                if _col not in th_cols:
+                    conn.execute(f"ALTER TABLE trade_history ADD COLUMN {_col} {_decl}")
 
             # ── users 遷移：補齊 email / is_verified / verification_token ──
             u_cols = [row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
@@ -192,15 +211,21 @@ def insert_trade(
     score: int,
     exit_reason: str,
     user_id: int = 0,
+    rsi: float = 0.0,
+    cci: float = 0.0,
+    vol_surge: float = 0.0,
+    trend_gap: float = 0.0,
+    leverage: int = 0,
 ) -> None:
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute(
                 """
                 INSERT INTO trade_history
-                    (user_id, timestamp, symbol, side, entry_price, exit_price, pnl, score, exit_reason)
+                    (user_id, timestamp, symbol, side, entry_price, exit_price, pnl, score, exit_reason,
+                     rsi, cci, vol_surge, trend_gap, leverage)
                 VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(user_id),
@@ -212,6 +237,11 @@ def insert_trade(
                     float(pnl),
                     int(score),
                     str(exit_reason),
+                    float(rsi),
+                    float(cci),
+                    float(vol_surge),
+                    float(trend_gap),
+                    int(leverage),
                 ),
             )
             conn.commit()

@@ -271,6 +271,8 @@ defaults = {
     "virtual_history_log": [],
     "agent_log":           [],
     "copilot_history":     [],
+    "auto_trade_enabled":  False,      # 自動交易總開關（預設關閉，避免開頁即下單）
+    "trend_filter_enabled": True,      # 趨勢濾網（預設開啟，封鎖強趨勢中的逆勢進場）
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -332,7 +334,11 @@ def fetch_real_positions() -> pd.DataFrame | None:
     ex = get_auth_exchange()
     if ex is None:
         return None
-    raw    = ex.fetch_positions()
+    try:
+        raw = ex.fetch_positions()
+    except (ccxt.AuthenticationError, ccxt.PermissionDenied, ccxt.ExchangeError):
+        # 金鑰無效（-2015 等）/ 權限不足：視為未綁定，回 None 讓 UI 顯示「未綁定」
+        return None
     active = [p for p in raw if (p.get("contracts") or 0) != 0]
     if not active:
         return pd.DataFrame()
@@ -543,7 +549,8 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
             time.sleep(0.1)       # 🛡️ 防封鎖裝甲：每次 K 線請求間隔 100ms
 
             try:
-                ohlcv = ex.fetch_ohlcv(sym, timeframe="15m", limit=20)
+                # 拉 100 根 15m K 線：同一次請求同時供「進場信號」與「趨勢濾網」使用
+                ohlcv = ex.fetch_ohlcv(sym, timeframe="15m", limit=100)
 
                 # 資料完整性驗證
                 if len(ohlcv) < 15:
@@ -560,6 +567,13 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
                 atr       = _calc_atr(highs, lows, closes)
                 avg_prev5 = sum(volumes[-6:-1]) / 5
                 vol_surge = round((volumes[-1] / avg_prev5) * 100, 1) if avg_prev5 > 0 else None
+
+                # ── 趨勢濾網指標：MA10 與 MA50 的偏離幅度 (%) ────────────────
+                # gap < 0 → 短均線在長均線下方（下跌趨勢）；gap > 0 → 上升趨勢。
+                # 幅度越大代表趨勢越強，用來封鎖「強趨勢中的逆勢接刀」。
+                _ma_short = sum(closes[-10:]) / min(10, len(closes))
+                _ma_long  = sum(closes[-50:]) / min(50, len(closes))
+                trend_gap = round((_ma_short - _ma_long) / _ma_long * 100, 2) if _ma_long > 0 else 0.0
 
                 if vol_surge is None or pd.isna(rsi) or pd.isna(cci):
                     continue
@@ -583,6 +597,7 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
                     "RSI 15m":           rsi,
                     "CCI 14":            cci,
                     "Vol Surge (%)":     vol_surge,
+                    "趨勢 (%)":          trend_gap,  # MA10/MA50 偏離幅度，供趨勢濾網與 UI 顯示
                     "atr":               atr if not pd.isna(atr) else 0.0,  # ATR(14)，供動態停利使用
                     "funding_rate":      funding_rate,  # 最新資金費率（原始小數，>0 代表多頭擁擠）
                     # ── 最後已收盤 K 線結構（供協議 Delta 刺客邏輯使用）──────
@@ -617,6 +632,7 @@ SNIPER_MARGIN_DEFAULT  = 1_000.0   # 單筆保證金預設值 (USDT)，實際由
 SNIPER_RSI_LONG        = 30.0      # RSI 低於此值 → 恐慌超賣 → 做多
 SNIPER_CCI_SHORT       = 250.0     # CCI 高於此值 → 極度超買 → 配合 is_pin_bar 做空
 SNIPER_VOL_MIN         = 150.0     # Vol Surge 須超過此值 (%) 才觸發做多
+SNIPER_TREND_BLOCK_PCT = 3.0       # 趨勢濾網：MA10 偏離 MA50 超過此幅度視為「強趨勢」，封鎖逆勢進場（避免接落下的刀）
 AGENT_LOG_MAX          = 50        # 日誌最多保留幾條
 TRAILING_STOP_PCT      = 0.05      # 移動停利回撤比例：5%（從最高水位回撤觸發平倉）
 OPEN_FEE_RATE          = 0.0005    # 開倉手續費率 (0.05%)
@@ -710,6 +726,7 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
         atr_val      = float(row.get("atr", 0.0) or 0.0)   # ATR(14)，0 代表資料不足
         price_val    = _parse_price(row.get("價格 (USDT)", ""))
         funding_rate = float(row.get("funding_rate", 0.0) or 0.0)
+        trend_gap    = float(row.get("趨勢 (%)", 0.0) or 0.0)   # MA10/MA50 偏離幅度
 
         if not symbol or price_val is None or price_val <= 0:
             continue
@@ -788,6 +805,21 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
         if side is None:
             continue
 
+        # ── 升級四：趨勢濾網（避免接落下的刀 / 追在山頂）──────────────────────
+        # 只攔截「強趨勢中的逆勢單」：
+        #   做多遇到強下跌趨勢（MA10 遠低於 MA50）→ 封鎖，避免自由落體接刀
+        #   做空遇到強上升趨勢（MA10 遠高於 MA50）→ 封鎖，避免逆勢追空
+        # 一般的小幅回檔（gap 在 ±SNIPER_TREND_BLOCK_PCT 內）仍允許進場。
+        if st.session_state.get("trend_filter_enabled", True):
+            if side == "Long" and trend_gap < -SNIPER_TREND_BLOCK_PCT:
+                print(f"[趨勢濾網] {symbol} 強下跌趨勢 (MA偏離 {trend_gap:+.1f}%)，"
+                      f"封鎖逆勢做多，避免接刀")
+                continue
+            if side == "Short" and trend_gap > SNIPER_TREND_BLOCK_PCT:
+                print(f"[趨勢濾網] {symbol} 強上升趨勢 (MA偏離 {trend_gap:+.1f}%)，"
+                      f"封鎖逆勢做空")
+                continue
+
         # ── 升級三：AI 共振評分 ───────────────────────────────────────────────
         score = _calc_resonance_score(rsi, cci, _wick_pct, float(vol_surge), side)
 
@@ -835,6 +867,11 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
             "atr":          atr_val,       # 開倉當下的 ATR(14)，驅動動態移動停利
             "score":        score,         # AI 共振評分 (0–100)
             "funding_rate": funding_rate,  # 開倉當下資金費率
+            # ── 開倉當下的決策 context（供未來離線複盤分析條件期望值）──────
+            "entry_rsi":       rsi,
+            "entry_cci":       cci,
+            "entry_vol_surge": float(vol_surge),
+            "entry_trend_gap": trend_gap,
             "status":       "Open",
         })
         st.session_state.virtual_balance -= (dynamic_margin + open_fee)
@@ -1042,6 +1079,11 @@ def _run_trailing_stop() -> None:
                 score       = int(vp.get("score") or 0),
                 exit_reason = _exit_reason,
                 user_id     = st.session_state.get("user_id", 0),
+                rsi         = float(vp.get("entry_rsi", 0.0) or 0.0),
+                cci         = float(vp.get("entry_cci", 0.0) or 0.0),
+                vol_surge   = float(vp.get("entry_vol_surge", 0.0) or 0.0),
+                trend_gap   = float(vp.get("entry_trend_gap", 0.0) or 0.0),
+                leverage    = int(vp.get("leverage", 0) or 0),
             )
 
         except Exception as _ex:
@@ -1214,6 +1256,17 @@ with st.sidebar:
             "私有 API 已攔截 · 本地虛擬錢包運作中</span></div>",
             unsafe_allow_html=True,
         )
+    elif fetch_account_balance() is None:
+        # 金鑰有填但查不到餘額（無效 / 權限不足 / -2015）→ 視同未綁定
+        st.markdown(
+            "<div style='background:rgba(255,180,0,0.12);border:1px solid rgba(255,180,0,0.4);"
+            "border-radius:6px;padding:0.45rem 0.7rem;margin-top:0.4rem;font-size:0.72rem;"
+            "color:#FFD700;font-weight:700'>"
+            "🟡 未綁定 API Key<br>"
+            "<span style='font-weight:400;color:#B8A040'>API Key 無效或權限不足 · 僅使用公開端點<br>"
+            "私有查詢已停用 · 本地虛擬錢包運作中</span></div>",
+            unsafe_allow_html=True,
+        )
     else:
         st.markdown(
             "<div style='background:rgba(0,194,255,0.08);border:1px solid rgba(0,194,255,0.25);"
@@ -1241,6 +1294,17 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### 🎛️ 虛擬沙盒戰術控制台")
+    # ── 自動交易總開關（預設 OFF：頁面開啟不會自動下單）──────────────────
+    st.toggle("🤖 自動交易引擎", key="auto_trade_enabled",
+              help="開啟後狙擊引擎才會自動開新倉；關閉時僅監控與管理既有持倉，不開新倉。")
+    if st.session_state.get("auto_trade_enabled"):
+        st.caption("🟢 引擎運轉中 · 符合條件即自動建倉")
+    else:
+        st.caption("⏸️ 引擎待命 · 開啟開關才會自動下單")
+    # ── 趨勢濾網開關（避免接落下的刀）────────────────────────────────────
+    st.toggle("🛡️ 趨勢濾網", key="trend_filter_enabled",
+              help=f"開啟後，強趨勢中的逆勢單會被封鎖（MA10 偏離 MA50 超過 "
+                   f"±{SNIPER_TREND_BLOCK_PCT:.0f}% 視為強趨勢），避免在自由落體中接刀。")
     st.slider("⚡ 槓桿倍數 (Leverage)",
               min_value=1, max_value=50, value=10,
               step=1, format="%dx", key="sniper_leverage")
@@ -1317,13 +1381,26 @@ st.markdown(
 @st.fragment(run_every=15)
 def frag_sandbox() -> None:
     # ── 引擎心跳：任何網路或解析異常都不中斷 UI 刷新 ──────────────────────
+    _auto_on = st.session_state.get("auto_trade_enabled", False)
     try:
         _sdf, _ = fetch_scanner_data()
-        _run_sniper(_sdf)
-        _update_mark_prices(_sdf)
-        _run_trailing_stop()       # 移動停利結算引擎
+        if _auto_on:               # 自動交易開關開啟時才會開新倉
+            _run_sniper(_sdf)
+        _update_mark_prices(_sdf)  # 持倉標記價更新（無論開關狀態都執行）
+        _run_trailing_stop()       # 移動停利結算引擎（讓既有倉位持續被管理）
     except Exception as _ex:
         print(f"[FOX][WARN] frag_sandbox 引擎心跳異常（已攔截，UI 繼續）→ {_ex}")
+
+    # ── 引擎狀態徽章 ──────────────────────────────────────────────────────
+    if _auto_on:
+        _eng_badge = ("<span style='font-size:0.78rem;color:#00FF88;font-weight:600;"
+                      "background:rgba(0,255,136,0.12);border:1px solid rgba(0,255,136,0.35);"
+                      "border-radius:4px;padding:0.15rem 0.5rem'>🟢 自動交易 ON · 狙擊引擎運轉中</span>")
+    else:
+        _eng_badge = ("<span style='font-size:0.78rem;color:#FF8C00;font-weight:600;"
+                      "background:rgba(255,140,0,0.12);border:1px solid rgba(255,140,0,0.35);"
+                      "border-radius:4px;padding:0.15rem 0.5rem'>⏸️ 自動交易 OFF · 僅監控，不開新倉</span>")
+    st.markdown(_eng_badge, unsafe_allow_html=True)
 
     st.markdown(
         "#### 🎮 F.O.X. 虛擬量化沙盒 &nbsp;"
@@ -1630,7 +1707,7 @@ def frag_scanner() -> None:
         else:
             # 只取 UI 顯示欄位（去除引擎專用 ohlc_* 欄位）
             _display_cols = ["Symbol", "24h 漲跌幅 (%)", "價格 (USDT)",
-                             "RSI 15m", "CCI 14", "Vol Surge (%)"]
+                             "RSI 15m", "CCI 14", "Vol Surge (%)", "趨勢 (%)"]
             _disp = _sdf[[c for c in _display_cols if c in _sdf.columns]]
 
             def _pc(v):
@@ -1649,22 +1726,33 @@ def frag_scanner() -> None:
             def _vc(v):
                 if not isinstance(v, (int, float)) or pd.isna(v): return ""
                 return "color: #FF6B35; font-weight: bold" if v > 200 else ""
+            def _tc(v):
+                # 趨勢偏離：強下跌(紅) / 強上升(綠)，超過門檻才上色（代表會被濾網攔截）
+                if not isinstance(v, (int, float)) or pd.isna(v): return ""
+                return ("color: #00FF88; font-weight: bold" if v > SNIPER_TREND_BLOCK_PCT else
+                        "color: #FF4B4B; font-weight: bold" if v < -SNIPER_TREND_BLOCK_PCT else
+                        "color: #5B7494")
 
             _fmt = {"24h 漲跌幅 (%)": "{:+.2f}%",
                     "RSI 15m":        "{:.1f}",
                     "CCI 14":         "{:.0f}",
-                    "Vol Surge (%)":  "{:.1f}%"}
+                    "Vol Surge (%)":  "{:.1f}%",
+                    "趨勢 (%)":       "{:+.1f}%"}
             _styled = (_disp.style
                        .map(_pc, subset=["24h 漲跌幅 (%)"])
                        .map(_rc, subset=["RSI 15m"])
                        .map(_cc, subset=["CCI 14"])
                        .map(_vc, subset=["Vol Surge (%)"])
+                       .map(_tc, subset=[c for c in ["趨勢 (%)"] if c in _disp.columns])
                        .format({k: v for k, v in _fmt.items() if k in _disp.columns}))
             st.dataframe(_styled, width="stretch", hide_index=True)
+            _tf_on = st.session_state.get("trend_filter_enabled", True)
             st.caption(f"掃描時間：{datetime.now().strftime('%H:%M:%S')} · 快取 20 秒 · "
                        "RSI < 30 🔵 超賣　"
                        "CCI > 250 🟣 協議 Delta 警戒　CCI < -100 🔵 超賣　"
-                       "Vol Surge > 200% 🟠 爆量")
+                       "Vol Surge > 200% 🟠 爆量　"
+                       f"趨勢 ±{SNIPER_TREND_BLOCK_PCT:.0f}% 為強趨勢"
+                       f"（濾網 {'🛡️ 開啟' if _tf_on else '⚪ 關閉'}：紅=禁多 / 綠=禁空）")
 
 
 # ── Fragment 5：F.O.X. 風控大腦 + AI 決策日誌 (10s) ───────────────────────
@@ -2064,6 +2152,11 @@ with _tab3:
                         score       = int(_mo_target.get("score") or 0),
                         exit_reason = "手動平倉",
                         user_id     = st.session_state.get("user_id", 0),
+                        rsi         = float(_mo_target.get("entry_rsi", 0.0) or 0.0),
+                        cci         = float(_mo_target.get("entry_cci", 0.0) or 0.0),
+                        vol_surge   = float(_mo_target.get("entry_vol_surge", 0.0) or 0.0),
+                        trend_gap   = float(_mo_target.get("entry_trend_gap", 0.0) or 0.0),
+                        leverage    = int(_mo_target.get("leverage", 0) or 0),
                     )
 
                     # ── 從 virtual_positions 刪除 Open 倉位 ───────────────────

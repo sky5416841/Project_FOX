@@ -500,6 +500,14 @@ _SCANNER_BLACKLIST: frozenset[str] = frozenset({
     "PAXG",
 })
 
+# 代幣化股票 / ETF 黑名單（非加密資產，避免污染掃描與策略；best-effort 清單）
+_STOCK_BLACKLIST: frozenset[str] = frozenset({
+    "QCOM", "SOXL", "SOXX", "COHR", "ARM", "NVDA", "TSLA", "AAPL", "AMZN", "MSFT",
+    "GOOGL", "GOOG", "META", "AMD", "INTC", "MSTR", "NFLX", "COIN", "MARA", "RIOT",
+    "PLTR", "SMCI", "AVGO", "TSM", "NIO", "GME", "AMC", "TQQQ", "SQQQ", "HOOD",
+    "ABNB", "CRM", "ORCL", "ADBE", "MU", "BABA", "DIS", "PYPL", "SHOP", "UBER",
+})
+
 # 字元格式白名單規則（純加密代幣應符合的模式）
 import re as _re
 _CRYPTO_NAME_RE = _re.compile(r"^[A-Z0-9]{2,12}$")   # 2–12 位大寫字母或數字
@@ -510,8 +518,8 @@ _RADAR_TOP_N          = 30           # 第二段：精準火控標的數量
 
 
 def _is_clean_crypto(base: str) -> bool:
-    """True iff base 看起來像純加密代幣，非金融商品/穩定幣/法幣。"""
-    if base in _SCANNER_BLACKLIST:
+    """True iff base 看起來像純加密代幣，非金融商品/穩定幣/法幣/股票。"""
+    if base in _SCANNER_BLACKLIST or base in _STOCK_BLACKLIST:
         return False
     if not _CRYPTO_NAME_RE.match(base):
         return False
@@ -823,7 +831,8 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
 
         if rsi < SNIPER_RSI_LONG and vol_surge > SNIPER_VOL_MIN:
             side = "Long"
-        elif cci > SNIPER_CCI_SHORT and is_pin_bar and funding_rate > 0:
+        elif cci > SNIPER_CCI_SHORT and vol_surge > SNIPER_VOL_MIN:
+            # 放寬做空條件，與做多對稱（極端超買 + 爆量）
             side = "Short"
 
         if side is None:
@@ -2018,9 +2027,19 @@ def frag_cfo_room() -> None:
         )
         return
 
-    # ── 統計四大指標 ──────────────────────────────────────────────────────
+    # ── 每筆「實扣手續費後」的淨損益（與真實虛擬餘額一致）──────────────────
+    # 淨損益 = 已實現盈虧(毛) − 開倉手續費 − 平倉手續費
+    # 開倉手續費由名目價值回推（nominal × 費率），平倉手續費平倉時已存於 close_fee。
+    def _net_pnl_of(_p: dict) -> float:
+        _gross    = float(_p.get("realized_pnl", 0.0) or 0.0)
+        _nominal  = float(_p.get("nominal", 0.0) or 0.0)
+        _open_fee = _nominal * OPEN_FEE_RATE
+        _close_fee = float(_p.get("close_fee", 0.0) or 0.0)
+        return _gross - _open_fee - _close_fee
+
+    # ── 統計四大指標（全部以「實扣手續費後」的淨損益計算）────────────────
     _total        = len(_all_closed)
-    _pnls         = [float(p.get("realized_pnl", 0.0)) for p in _all_closed]
+    _pnls         = [_net_pnl_of(p) for p in _all_closed]
     _wins         = sum(1 for x in _pnls if x > 0)
     _losses       = sum(1 for x in _pnls if x < 0)
     _win_rate     = (_wins / _total * 100) if _total > 0 else 0.0
@@ -2074,7 +2093,7 @@ def frag_cfo_room() -> None:
     _equity  = _INITIAL
     _curve_rows = [{"交易筆次": 0, "資金淨值 (USDT)": _equity}]
     for _i, _p in enumerate(_sorted_closed, start=1):
-        _equity += float(_p.get("realized_pnl", 0.0))
+        _equity += _net_pnl_of(_p)   # 用實扣手續費後的淨損益，淨值才會貼合真實餘額
         _curve_rows.append({"交易筆次": _i, "資金淨值 (USDT)": round(_equity, 4)})
 
     _curve_df = pd.DataFrame(_curve_rows).set_index("交易筆次")

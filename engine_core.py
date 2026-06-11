@@ -52,6 +52,14 @@ _SCANNER_BLACKLIST = frozenset({
     "FDUSD", "PYUSD", "USDE", "FRAX", "LUSD", "GUSD", "EUR", "GBP", "AUD", "JPY",
     "BRL", "BIDR", "IDRT", "NGN", "RUB", "TRY", "PAXG",
 })
+
+# 代幣化股票 / ETF 黑名單（非加密資產，避免污染策略；best-effort 清單）
+_STOCK_BLACKLIST = frozenset({
+    "QCOM", "SOXL", "SOXX", "COHR", "ARM", "NVDA", "TSLA", "AAPL", "AMZN", "MSFT",
+    "GOOGL", "GOOG", "META", "AMD", "INTC", "MSTR", "NFLX", "COIN", "MARA", "RIOT",
+    "PLTR", "SMCI", "AVGO", "TSM", "NIO", "GME", "AMC", "TQQQ", "SQQQ", "HOOD",
+    "ABNB", "CRM", "ORCL", "ADBE", "MU", "BABA", "DIS", "PYPL", "SHOP", "UBER",
+})
 _CRYPTO_NAME_RE = re.compile(r"^[A-Z0-9]{2,12}$")
 _CRYPTO_NAME_BLOCKLIST_PATTERNS = ("XAU", "XAG", "USD", "EUR", "GBP", "CL")
 
@@ -115,7 +123,7 @@ def _parse_price(price_str) -> float | None:
 
 
 def _is_clean_crypto(base: str) -> bool:
-    if base in _SCANNER_BLACKLIST:
+    if base in _SCANNER_BLACKLIST or base in _STOCK_BLACKLIST:
         return False
     if not _CRYPTO_NAME_RE.match(base):
         return False
@@ -329,7 +337,8 @@ def run_sniper(state: dict, settings: dict, scan_rows: list) -> None:
         side = None
         if rsi < SNIPER_RSI_LONG and vol_surge > SNIPER_VOL_MIN:
             side = "Long"
-        elif cci > SNIPER_CCI_SHORT and is_pin_bar and funding_rate > 0:
+        elif cci > SNIPER_CCI_SHORT and vol_surge > SNIPER_VOL_MIN:
+            # 放寬做空條件，與做多對稱（極端超買 + 爆量），讓做空真的會觸發
             side = "Short"
         if side is None:
             continue

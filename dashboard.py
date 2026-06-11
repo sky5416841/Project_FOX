@@ -295,6 +295,11 @@ defaults = {
     "copilot_history":     [],
     "auto_trade_enabled":  False,      # 自動交易總開關（預設關閉，避免開頁即下單）
     "trend_filter_enabled": True,      # 趨勢濾網（預設開啟，封鎖強趨勢中的逆勢進場）
+    # 戰術控制台參數預設值（放進 session_state，sidebar 元件就不必再傳 value=，避免警告）
+    "sniper_leverage":     10,
+    "sniper_margin":       1_000.0,
+    "sniper_max_pos":      5,
+    "sniper_loss_cooldown": 120,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -481,9 +486,8 @@ def _calc_atr(highs: list, lows: list, closes: list, period: int = 14) -> float:
 
 
 # ── 天眼掃描器：終極黑名單（非加密資產完全排除）────────────────────────────
+# 註：BTC/ETH 已移出黑名單，改由 _MAJORS 強制納入掃描（讓策略也能做大幣）
 _SCANNER_BLACKLIST: frozenset[str] = frozenset({
-    # 主流大型幣
-    "BTC", "ETH",
     # 貴金屬 / 大宗商品（含期貨代碼）
     "XAU", "XAG", "GOLD", "SILVER",
     "CL",                              # WTI 原油期貨
@@ -515,6 +519,7 @@ _CRYPTO_NAME_BLOCKLIST_PATTERNS = ("XAU", "XAG", "USD", "EUR", "GBP", "CL")
 
 _RADAR_PHASE1_VOL_MIN = 10_000_000   # 第一段：24h 成交額下限 (USDT)，過濾殭屍幣
 _RADAR_TOP_N          = 30           # 第二段：精準火控標的數量
+_MAJORS = ("BTC", "ETH", "SOL", "BNB", "XRP", "DOGE")   # 每輪強制納入掃描的主流大幣
 
 
 def _is_clean_crypto(base: str) -> bool:
@@ -572,6 +577,13 @@ def fetch_scanner_data() -> tuple[pd.DataFrame, str | None]:
         # 按 24h 漲跌幅『絕對值』降序 → 波動最劇烈的在最前
         candidates.sort(key=lambda x: abs(x[4]), reverse=True)
         fire_control = candidates[:_RADAR_TOP_N]
+
+        # 強制納入主流大幣（波動度排不進 Top 30 時補進來，讓大幣也被評估）
+        _picked = {c[1] for c in fire_control}
+        for c in candidates:
+            if c[1] in _MAJORS and c[1] not in _picked:
+                fire_control.append(c)
+                _picked.add(c[1])
 
         # ════════════════════════════════════════════════════════════════════
         # 第二段：精準火控 — 逐一 fetch_ohlcv，0.1s 限速防封鎖
@@ -1344,17 +1356,17 @@ with st.sidebar:
               help=f"開啟後，強趨勢中的逆勢單會被封鎖（MA10 偏離 MA50 超過 "
                    f"±{SNIPER_TREND_BLOCK_PCT:.0f}% 視為強趨勢），避免在自由落體中接刀。")
     st.slider("⚡ 槓桿倍數 (Leverage)",
-              min_value=1, max_value=50, value=10,
+              min_value=1, max_value=50,
               step=1, format="%dx", key="sniper_leverage")
     st.number_input("💰 單筆保證金 (USDT)",
                     min_value=100.0, max_value=50_000.0,
-                    value=1_000.0, step=100.0, key="sniper_margin")
+                    step=100.0, key="sniper_margin")
     st.slider("📂 最大同時持倉數",
-              min_value=1, max_value=10, value=5,
+              min_value=1, max_value=10,
               step=1, key="sniper_max_pos")
     st.number_input("⏳ 同幣種虧損冷卻時間 (分鐘)",
                     min_value=0, max_value=1440,
-                    value=120, step=10, key="sniper_loss_cooldown")
+                    step=10, key="sniper_loss_cooldown")
 
     # 把目前設定寫到設定檔，供背景引擎讀取（分頁關閉後仍照最後設定運行）
     _persist_settings()
@@ -1589,9 +1601,8 @@ def frag_chart() -> None:
     _tf = st.radio(
         "時間級別",
         _TF_OPTIONS,
-        index=_TF_OPTIONS.index(st.session_state.get("selected_timeframe", "15m")),
         horizontal=True,
-        key="selected_timeframe",
+        key="selected_timeframe",      # 初值由 session_state 預設 "15m" 提供，不再傳 index= 以免警告
         label_visibility="collapsed",
     )
 

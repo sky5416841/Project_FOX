@@ -47,11 +47,14 @@ _RADAR_PHASE1_VOL_MIN = 10_000_000
 _RADAR_TOP_N          = 30
 
 _SCANNER_BLACKLIST = frozenset({
-    "BTC", "ETH", "XAU", "XAG", "GOLD", "SILVER", "CL", "OIL", "BRENT", "BRENTOIL",
+    "XAU", "XAG", "GOLD", "SILVER", "CL", "OIL", "BRENT", "BRENTOIL",
     "GAS", "NG", "COPPER", "HG", "USDC", "USDT", "BUSD", "TUSD", "USDP", "DAI",
     "FDUSD", "PYUSD", "USDE", "FRAX", "LUSD", "GUSD", "EUR", "GBP", "AUD", "JPY",
     "BRL", "BIDR", "IDRT", "NGN", "RUB", "TRY", "PAXG",
 })
+
+# 主流大幣：每輪強制納入掃描（即使波動度排不進 Top 30，也讓策略有機會做大幣）
+_MAJORS = ("BTC", "ETH", "SOL", "BNB", "XRP", "DOGE")
 
 # 代幣化股票 / ETF 黑名單（非加密資產，避免污染策略；best-effort 清單）
 _STOCK_BLACKLIST = frozenset({
@@ -192,6 +195,13 @@ def fetch_scanner_rows(exchange) -> tuple[list, str | None]:
 
         candidates.sort(key=lambda x: abs(x[4]), reverse=True)
         fire_control = candidates[:_RADAR_TOP_N]
+
+        # 強制納入主流大幣（若波動度排不進 Top 30，補進來讓它們也被評估）
+        _picked = {c[1] for c in fire_control}
+        for c in candidates:
+            if c[1] in _MAJORS and c[1] not in _picked:
+                fire_control.append(c)
+                _picked.add(c[1])
 
         rows = []
         for sym, sym_base, last_price, _, pct24h in fire_control:

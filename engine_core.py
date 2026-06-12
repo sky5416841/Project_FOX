@@ -62,6 +62,7 @@ _STOCK_BLACKLIST = frozenset({
     "GOOGL", "GOOG", "META", "AMD", "INTC", "MSTR", "NFLX", "COIN", "MARA", "RIOT",
     "PLTR", "SMCI", "AVGO", "TSM", "NIO", "GME", "AMC", "TQQQ", "SQQQ", "HOOD",
     "ABNB", "CRM", "ORCL", "ADBE", "MU", "BABA", "DIS", "PYPL", "SHOP", "UBER",
+    "SAMSUNG", "SONY", "NKE", "MCD", "SBUX", "PEP", "WMT", "BRK", "JPM", "GS",
 })
 _CRYPTO_NAME_RE = re.compile(r"^[A-Z0-9]{2,12}$")
 _CRYPTO_NAME_BLOCKLIST_PATTERNS = ("XAU", "XAG", "USD", "EUR", "GBP", "CL")
@@ -347,8 +348,10 @@ def run_sniper(state: dict, settings: dict, scan_rows: list) -> None:
         side = None
         if rsi < SNIPER_RSI_LONG and vol_surge > SNIPER_VOL_MIN:
             side = "Long"
-        elif cci > SNIPER_CCI_SHORT and vol_surge > SNIPER_VOL_MIN:
-            # 放寬做空條件，與做多對稱（極端超買 + 爆量），讓做空真的會觸發
+        elif (trend_gap < -SNIPER_TREND_BLOCK_PCT
+              and rsi < 50 and vol_surge > SNIPER_VOL_MIN):
+            # 順勢做空：確認下跌趨勢(MA10 遠低於 MA50) + 動能偏空(RSI<50) + 爆量。
+            # 取代舊的「超買+爆量就空」（對著噴出的火箭開槍，已證實 0/14 全賠）。
             side = "Short"
         if side is None:
             continue
@@ -395,8 +398,8 @@ def run_sniper(state: dict, settings: dict, scan_rows: list) -> None:
         tag = ("🔥 絕殺" if score >= 80 else "✅ 標準" if score >= 60 else "🔬 試水")
         if side == "Short":
             agent_log.insert(0,
-                f"[{ts}]　🟣 [協議 Delta] **{symbol}** CCI {cci:.0f}、{wick_pct:.0f}% 長上影線、"
-                f"資金費率 {funding_rate*100:+.4f}%　評分 {score} {tag} | {leverage}x"
+                f"[{ts}]　🔻 [順勢做空] **{symbol}** 下跌趨勢 (MA偏離 {trend_gap:+.1f}%, RSI {rsi:.1f}) + "
+                f"爆量 {vol_surge:.0f}%　評分 {score} {tag} | {leverage}x"
                 f" | 保證金 ${dynamic_margin:,.0f} @ {entry_slipped:,.4f}　手續費 -${open_fee:,.2f}")
         else:
             agent_log.insert(0,

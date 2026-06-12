@@ -510,6 +510,7 @@ _STOCK_BLACKLIST: frozenset[str] = frozenset({
     "GOOGL", "GOOG", "META", "AMD", "INTC", "MSTR", "NFLX", "COIN", "MARA", "RIOT",
     "PLTR", "SMCI", "AVGO", "TSM", "NIO", "GME", "AMC", "TQQQ", "SQQQ", "HOOD",
     "ABNB", "CRM", "ORCL", "ADBE", "MU", "BABA", "DIS", "PYPL", "SHOP", "UBER",
+    "SAMSUNG", "SONY", "NKE", "MCD", "SBUX", "PEP", "WMT", "BRK", "JPM", "GS",
 })
 
 # 字元格式白名單規則（純加密代幣應符合的模式）
@@ -843,8 +844,9 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
 
         if rsi < SNIPER_RSI_LONG and vol_surge > SNIPER_VOL_MIN:
             side = "Long"
-        elif cci > SNIPER_CCI_SHORT and vol_surge > SNIPER_VOL_MIN:
-            # 放寬做空條件，與做多對稱（極端超買 + 爆量）
+        elif (trend_gap < -SNIPER_TREND_BLOCK_PCT
+              and rsi < 50 and vol_surge > SNIPER_VOL_MIN):
+            # 順勢做空：下跌趨勢 + 動能偏空 + 爆量（取代舊的「超買就空」）
             side = "Short"
 
         if side is None:

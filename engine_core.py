@@ -391,6 +391,7 @@ def run_sniper(state: dict, settings: dict, scan_rows: list) -> None:
             "funding_rate": funding_rate, "status": "Open",
             "entry_rsi": rsi, "entry_cci": cci,
             "entry_vol_surge": float(vol_surge), "entry_trend_gap": trend_gap,
+            "entry_funding_rate": funding_rate,   # 進場當下資金費率快照（funding_rate 會被即時刷新）
         })
         state["virtual_balance"] -= (dynamic_margin + open_fee)
         existing.add(symbol)
@@ -411,10 +412,14 @@ def run_sniper(state: dict, settings: dict, scan_rows: list) -> None:
 
 def update_mark_prices(state: dict, scan_rows: list, exchange) -> None:
     price_map = {}
+    funding_map = {}
     for row in scan_rows:
         p = _parse_price(row.get("價格 (USDT)", ""))
         if p is not None and p > 0:
             price_map[row.get("Symbol", "")] = p
+        # 順便建立即時資金費率表（掃描每輪都已抓取）
+        if "funding_rate" in row:
+            funding_map[row.get("Symbol", "")] = float(row.get("funding_rate", 0.0) or 0.0)
 
     open_positions = [vp for vp in state.get("virtual_positions", [])
                       if vp.get("status", "Open") == "Open"]
@@ -439,6 +444,9 @@ def update_mark_prices(state: dict, scan_rows: list, exchange) -> None:
             vp["price_error"] = False
         else:
             vp["price_error"] = True
+        # 即時刷新資金費率（取不到就維持原值，不覆蓋成 0）
+        if base in funding_map:
+            vp["funding_rate"] = funding_map[base]
 
 
 def run_trailing_stop(state: dict, user_id: int) -> None:

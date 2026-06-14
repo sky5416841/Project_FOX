@@ -36,6 +36,9 @@ SNIPER_VOL_MIN         = 150.0
 SNIPER_TREND_BLOCK_PCT = 3.0
 AGENT_LOG_MAX          = 50
 TRAILING_STOP_PCT      = 0.05
+TRAIL_ATR_MULT         = 2.0    # 一般移動停利距離：2×ATR（讓贏單跑）
+TRAIL_ATR_MULT_TIGHT   = 1.0    # 大賺後收緊距離：1×ATR（鎖利）
+PROFIT_RATCHET_ATR     = 3.0    # 有利移動達 3×ATR 視為「大賺」，啟動收緊
 OPEN_FEE_RATE          = 0.0005
 CLOSE_FEE_RATE         = 0.0005
 SLIPPAGE_PCT           = 0.001
@@ -124,6 +127,20 @@ def _parse_price(price_str) -> float | None:
         return float(str(price_str).replace(",", "").strip())
     except Exception:
         return None
+
+
+def trail_distance(entry: float, hwm: float, atr: float, side: str) -> float:
+    """利潤棘輪移動停利距離（價格）：有利移動越大，停利收得越緊以鎖住獲利。
+
+    剛開倉用 2×ATR 讓贏單發展；當水位相對進場的有利移動 ≥ 3×ATR（大賺）→ 收緊成 1×ATR。
+    atr 不可用時降級為固定百分比。供引擎結算與 UI 顯示共用，確保一致。
+    """
+    if atr <= 0:
+        return entry * TRAILING_STOP_PCT
+    fav_move = (hwm - entry) if side == "Long" else (entry - hwm)
+    if fav_move >= PROFIT_RATCHET_ATR * atr:
+        return TRAIL_ATR_MULT_TIGHT * atr
+    return TRAIL_ATR_MULT * atr
 
 
 def _is_clean_crypto(base: str) -> bool:
@@ -461,15 +478,18 @@ def run_trailing_stop(state: dict, user_id: int) -> None:
             side   = vp["side"]; hwm = float(vp.get("hwm", entry))
             margin = float(vp.get("margin", SNIPER_MARGIN_DEFAULT))
             atr    = float(vp.get("atr", 0.0) or 0.0)
-            trail_dist = (2.0 * atr) if atr > 0 else (entry * TRAILING_STOP_PCT)
-            upnl = (mark - entry) * qty if side == "Long" else (entry - mark) * qty
 
+            # 先更新最高/最低水位（HWM）
             if side == "Long":
                 if mark > hwm:
                     vp["hwm"] = mark; hwm = mark
             else:
                 if mark < hwm:
                     vp["hwm"] = mark; hwm = mark
+
+            # 利潤棘輪：依「相對進場的有利移動」決定停利距離（大賺收緊鎖利）
+            trail_dist = trail_distance(entry, hwm, atr, side)
+            upnl = (mark - entry) * qty if side == "Long" else (entry - mark) * qty
 
             liquidated = upnl <= -(margin * LIQUIDATION_THRESHOLD)
             trailing_triggered = False

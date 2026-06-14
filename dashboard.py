@@ -1912,11 +1912,16 @@ def frag_virtual_positions() -> None:
             _score  = _vp.get("score", "—")
             _fr     = float(_vp.get("funding_rate", 0.0) or 0.0)
             _p      = (_m - _e) * _q if _s == "Long" else (_e - _m) * _q
-            # 觸發線：ATR 動態距離 (2×ATR)；舊倉位 ATR=0 時降級回固定 5%
-            _tdist = (2.0 * _atr) if _atr > 0 else (_h * TRAILING_STOP_PCT)
+            # 觸發線：與引擎共用利潤棘輪邏輯（大賺後自動收緊），顯示才會跟實際出場一致
+            _tdist = engine_core.trail_distance(_e, _h, _atr, _s)
             _trig  = _h - _tdist if _s == "Long" else _h + _tdist
-            # 欄位尾綴：顯示是 ATR 動態還是固定 5%（方便識別舊倉位）
-            _trig_label = f"{_trig:,.4f} ({'ATR×2' if _atr > 0 else '固定5%'})"
+            # 尾綴標示目前用寬(2×ATR)還是收緊(1×ATR鎖利)，ATR=0 則固定5%
+            if _atr <= 0:
+                _trig_tag = "固定5%"
+            else:
+                _fav = (_h - _e) if _s == "Long" else (_e - _h)
+                _trig_tag = "🔒ATR×1" if _fav >= engine_core.PROFIT_RATCHET_ATR * _atr else "ATR×2"
+            _trig_label = f"{_trig:,.4f} ({_trig_tag})"
             # 共振評分標籤
             if isinstance(_score, int):
                 _score_label = (f"{_score} 🔥" if _score >= 80

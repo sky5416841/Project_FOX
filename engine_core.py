@@ -39,6 +39,7 @@ TRAILING_STOP_PCT      = 0.05
 TRAIL_ATR_MULT         = 2.0    # 一般移動停利距離：2×ATR（讓贏單跑）
 TRAIL_ATR_MULT_TIGHT   = 1.0    # 大賺後收緊距離：1×ATR（鎖利）
 PROFIT_RATCHET_ATR     = 3.0    # 有利移動達 3×ATR 視為「大賺」，啟動收緊
+FUNDING_INTERVAL_HOURS = 8.0    # 資金費率結算間隔（真實有 1/4/8h，此處用 8h 近似）
 OPEN_FEE_RATE          = 0.0005
 CLOSE_FEE_RATE         = 0.0005
 SLIPPAGE_PCT           = 0.001
@@ -410,6 +411,7 @@ def run_sniper(state: dict, settings: dict, scan_rows: list) -> None:
             "entry_rsi": rsi, "entry_cci": cci,
             "entry_vol_surge": float(vol_surge), "entry_trend_gap": trend_gap,
             "entry_funding_rate": funding_rate,   # 進場當下資金費率快照（funding_rate 會被即時刷新）
+            "opened_ts": time.time(),             # 開倉 epoch 時間戳，供計算持倉時長與資金費
         })
         state["virtual_balance"] -= (dynamic_margin + open_fee)
         existing.add(symbol)
@@ -467,6 +469,25 @@ def update_mark_prices(state: dict, scan_rows: list, exchange) -> None:
             vp["funding_rate"] = funding_map[base]
 
 
+def funding_pnl(vp: dict, mark: float, now_ts: float) -> float:
+    """依持倉時長累計的資金費損益（簽名值，負=付費）。
+
+    多單在資金費率>0 時付費（成本，負);空單則收取（正)。
+    用連續累計近似:費率 × 名目 × (持倉小時 / 結算間隔)。舊倉位無 opened_ts 則回 0。
+    """
+    opened_ts = float(vp.get("opened_ts", 0) or 0)
+    if opened_ts <= 0:
+        return 0.0
+    hold_h = (now_ts - opened_ts) / 3600.0
+    if hold_h <= 0:
+        return 0.0
+    fr = float(vp.get("funding_rate", 0.0) or 0.0)
+    notional = float(vp.get("qty", 0)) * mark
+    periods = hold_h / FUNDING_INTERVAL_HOURS
+    sign = -1.0 if vp.get("side") == "Long" else 1.0
+    return sign * fr * notional * periods
+
+
 def run_trailing_stop(state: dict, user_id: int) -> None:
     ts = datetime.now().strftime("%H:%M:%S")
     agent_log = state.setdefault("agent_log", [])
@@ -504,11 +525,13 @@ def run_trailing_stop(state: dict, user_id: int) -> None:
 
             pnl           = round(upnl, 4)
             close_fee     = round(qty * mark * CLOSE_FEE_RATE, 4)
-            returned      = margin + pnl - close_fee
+            fund_pnl      = round(funding_pnl(vp, mark, time.time()), 4)  # 持倉期間資金費（簽名值）
+            returned      = margin + pnl - close_fee + fund_pnl
             state["virtual_balance"] += max(returned, 0.0)
 
             vp["status"] = "Closed"; vp["closed_at"] = ts
-            vp["closed_price"] = mark; vp["realized_pnl"] = pnl; vp["close_fee"] = close_fee
+            vp["closed_price"] = mark; vp["realized_pnl"] = pnl
+            vp["close_fee"] = close_fee; vp["funding_pnl"] = fund_pnl
 
             if liquidated:
                 agent_log.insert(0,

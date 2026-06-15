@@ -2053,15 +2053,15 @@ def frag_cfo_room() -> None:
         )
         return
 
-    # ── 每筆「實扣手續費後」的淨損益（與真實虛擬餘額一致）──────────────────
-    # 淨損益 = 已實現盈虧(毛) − 開倉手續費 − 平倉手續費
-    # 開倉手續費由名目價值回推（nominal × 費率），平倉手續費平倉時已存於 close_fee。
+    # ── 每筆「實扣所有成本後」的淨損益（與真實虛擬餘額一致）──────────────────
+    # 淨損益 = 已實現盈虧(毛) − 開倉手續費 − 平倉手續費 + 資金費(簽名值，負=付費)
     def _net_pnl_of(_p: dict) -> float:
         _gross    = float(_p.get("realized_pnl", 0.0) or 0.0)
         _nominal  = float(_p.get("nominal", 0.0) or 0.0)
         _open_fee = _nominal * OPEN_FEE_RATE
         _close_fee = float(_p.get("close_fee", 0.0) or 0.0)
-        return _gross - _open_fee - _close_fee
+        _fund_pnl  = float(_p.get("funding_pnl", 0.0) or 0.0)
+        return _gross - _open_fee - _close_fee + _fund_pnl
 
     # ── 統計四大指標（全部以「實扣手續費後」的淨損益計算）────────────────
     _total        = len(_all_closed)
@@ -2204,11 +2204,12 @@ with _tab3:
                                else (_mo_e - _mo_m) * _mo_q)
                     _mo_pnl = round(_mo_pnl, 4)
 
-                    # ── 平倉手續費 ────────────────────────────────────────────
-                    _mo_fee = round(_mo_q * _mo_m * CLOSE_FEE_RATE, 4)
+                    # ── 平倉手續費 + 持倉期間資金費 ──────────────────────────
+                    _mo_fee  = round(_mo_q * _mo_m * CLOSE_FEE_RATE, 4)
+                    _mo_fund = round(engine_core.funding_pnl(_mo_target, _mo_m, time.time()), 4)
 
-                    # ── 歸還帳戶（保證金 + PNL - 手續費）────────────────────
-                    _mo_returned = _mo_mg + _mo_pnl - _mo_fee
+                    # ── 歸還帳戶（保證金 + PNL - 手續費 + 資金費）────────────
+                    _mo_returned = _mo_mg + _mo_pnl - _mo_fee + _mo_fund
                     st.session_state.virtual_balance += max(_mo_returned, 0.0)
 
                     # ── 移入 virtual_history_log（🛑 標記）────────────────────
@@ -2219,6 +2220,7 @@ with _tab3:
                         "closed_price": _mo_m,
                         "realized_pnl": _mo_pnl,
                         "close_fee":    _mo_fee,
+                        "funding_pnl":  _mo_fund,
                     })
 
                     # ── 寫入 SQLite 持久化交易紀錄 ────────────────────────────

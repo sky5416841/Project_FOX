@@ -31,3 +31,6 @@ run_err.log
 
 # 引擎執行期使用者設定檔（背景引擎讀寫，不進版控）
 fox_settings_*.json
+
+# DB 備份檔
+fox_trading_backup_*.db

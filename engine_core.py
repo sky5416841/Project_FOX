@@ -296,6 +296,7 @@ def run_sniper(state: dict, settings: dict, scan_rows: list) -> None:
     max_pos      = int(settings.get("sniper_max_pos", 5))
     cooldown_min = int(settings.get("sniper_loss_cooldown", 120))
     trend_filter = bool(settings.get("trend_filter_enabled", True))
+    allow_short  = bool(settings.get("allow_short", False))   # 預設只做多（做空經實測為負期望值）
 
     positions = state.setdefault("virtual_positions", [])
     state.setdefault("virtual_history_log", [])
@@ -365,10 +366,10 @@ def run_sniper(state: dict, settings: dict, scan_rows: list) -> None:
         side = None
         if rsi < SNIPER_RSI_LONG and vol_surge > SNIPER_VOL_MIN:
             side = "Long"
-        elif (trend_gap < -SNIPER_TREND_BLOCK_PCT
+        elif (allow_short and trend_gap < -SNIPER_TREND_BLOCK_PCT
               and rsi < 50 and vol_surge > SNIPER_VOL_MIN):
-            # 順勢做空：確認下跌趨勢(MA10 遠低於 MA50) + 動能偏空(RSI<50) + 爆量。
-            # 取代舊的「超買+爆量就空」（對著噴出的火箭開槍，已證實 0/14 全賠）。
+            # 順勢做空（預設關閉）：經兩場實測（兩種做空邏輯）皆為負期望值，
+            # 加密幣向上漂移 + 軋空使系統性做空難贏。預設只做多止血，可由開關重啟實驗。
             side = "Short"
         if side is None:
             continue

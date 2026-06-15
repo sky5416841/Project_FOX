@@ -238,7 +238,7 @@ def _user_state_path(user_id: int) -> str:
     return os.path.join(_STATE_DIR, f"fox_sandbox_state_{user_id}.json")
 
 
-_SETTINGS_KEYS = ("auto_trade_enabled", "trend_filter_enabled",
+_SETTINGS_KEYS = ("auto_trade_enabled", "trend_filter_enabled", "allow_short",
                   "sniper_leverage", "sniper_margin", "sniper_max_pos", "sniper_loss_cooldown")
 
 
@@ -295,6 +295,7 @@ defaults = {
     "copilot_history":     [],
     "auto_trade_enabled":  False,      # 自動交易總開關（預設關閉，避免開頁即下單）
     "trend_filter_enabled": True,      # 趨勢濾網（預設開啟，封鎖強趨勢中的逆勢進場）
+    "allow_short":         False,      # 允許做空（預設關閉：做空經實測為負期望值，先只做多）
     # 戰術控制台參數預設值（放進 session_state，sidebar 元件就不必再傳 value=，避免警告）
     "sniper_leverage":     10,
     "sniper_margin":       1_000.0,
@@ -753,6 +754,7 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
     margin        = float(st.session_state.get("sniper_margin",     SNIPER_MARGIN_DEFAULT))
     max_pos       = int(st.session_state.get("sniper_max_pos",      5))
     cooldown_min  = int(st.session_state.get("sniper_loss_cooldown", 120))
+    allow_short   = bool(st.session_state.get("allow_short", False))
 
     # 僅統計「Open」倉位，已平倉的不佔用 symbol slot（允許重新入場）
     open_pos = [p for p in st.session_state.virtual_positions
@@ -844,9 +846,9 @@ def _run_sniper(scan_df: pd.DataFrame) -> None:
 
         if rsi < SNIPER_RSI_LONG and vol_surge > SNIPER_VOL_MIN:
             side = "Long"
-        elif (trend_gap < -SNIPER_TREND_BLOCK_PCT
+        elif (allow_short and trend_gap < -SNIPER_TREND_BLOCK_PCT
               and rsi < 50 and vol_surge > SNIPER_VOL_MIN):
-            # 順勢做空：下跌趨勢 + 動能偏空 + 爆量（取代舊的「超買就空」）
+            # 順勢做空（預設關閉，實測為負期望值）
             side = "Short"
 
         if side is None:
@@ -1357,6 +1359,12 @@ with st.sidebar:
     st.toggle("🛡️ 趨勢濾網", key="trend_filter_enabled",
               help=f"開啟後，強趨勢中的逆勢單會被封鎖（MA10 偏離 MA50 超過 "
                    f"±{SNIPER_TREND_BLOCK_PCT:.0f}% 視為強趨勢），避免在自由落體中接刀。")
+    # ── 做空開關（預設關閉：實測做空為負期望值，先只做多）────────────────
+    st.toggle("📉 允許做空", key="allow_short",
+              help="預設關閉（只做多）。做空經兩場實測為負期望值（加密幣向上漂移＋軋空），"
+                   "先專注做多止血；之後要用新邏輯實驗做空再開啟。")
+    if not st.session_state.get("allow_short"):
+        st.caption("📈 目前：只做多模式")
     st.slider("⚡ 槓桿倍數 (Leverage)",
               min_value=1, max_value=50,
               step=1, format="%dx", key="sniper_leverage")

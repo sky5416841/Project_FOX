@@ -2140,7 +2140,7 @@ def frag_cfo_room() -> None:
         "📉 最大回撤 (Max Drawdown)",
         f"-${_max_dd:,.2f}",
         (f"-{_max_dd_pct:.2f}% 自峰值" if _max_dd > 0 else "尚無回撤"),
-        delta_color="inverse",
+        delta_color="off",
     )
     _rc4.metric(
         "💵 累計手續費成本",

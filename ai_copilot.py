@@ -30,7 +30,9 @@ _SCHEMA_DESCRIPTION = """
   side         TEXT      方向：'Long' 或 'Short'
   entry_price  REAL      開倉均價（USDT，已含滑價）
   exit_price   REAL      平倉價格（USDT）
-  pnl          REAL      已實現盈虧（USDT）；正 = 獲利，負 = 損失
+  pnl          REAL      已實現盈虧「毛利」（USDT，僅價差）；正 = 獲利，負 = 損失。
+                         ⚠ 此欄未扣手續費（開/平各 0.05%，來回約 0.1% 名目）與資金費，
+                         實際淨利會更低；分析期望值時務必提醒此盲點。
   score        INTEGER   AI 共振評分 0–100；越高信號品質越強
   exit_reason  TEXT      平倉原因：'移動停利'、'動態停損'、'爆倉'、'手動平倉'
   rsi          REAL      開倉當下 RSI(15m)；做多信號通常 < 30（超賣）
@@ -42,7 +44,7 @@ _SCHEMA_DESCRIPTION = """
 
 計算定義：
   勝率 = COUNT(pnl > 0) / COUNT(*)
-  期望值 = AVG(pnl)
+  期望值 = AVG(pnl)  ← 注意：這是「毛利期望值」，未扣手續費；真實淨期望值更低
   盈虧比 = AVG(pnl WHERE pnl > 0) / ABS(AVG(pnl WHERE pnl < 0))
 
 只允許 SELECT；禁止 INSERT / UPDATE / DELETE / DROP / CREATE / ALTER。
@@ -79,6 +81,11 @@ _SUMMARY_SYSTEM_PROMPT = f"""{_SCHEMA_DESCRIPTION}
 - 禁止：虛構、推測、捏造任何不在查詢結果中的數據。
 - 禁止：超過一條「戰術建議」，過多建議等於沒有建議。
 - 若資料集為空：直接回報「本次查詢：零筆紀錄。資料庫尚無符合條件的戰鬥紀錄。」
+
+# 手續費盲點（報告期望值/盈虧時務必遵守）
+- pnl 是「毛利」，未扣手續費（來回約 0.1% 名目）與資金費。報告期望值或總盈虧時，
+  須附一句提醒：此為毛利、扣費後淨值更低。
+- 若毛利期望值為小幅正值（每筆 < 名目的 0.1%），明確指出「扣費後很可能翻負，edge 不成立」。
 
 # 回應範例風格（參考，非模板）
 「戰報確認。SOL 本期共 12 次出擊，勝率 66.7%，期望值 +$24.3 USDT。

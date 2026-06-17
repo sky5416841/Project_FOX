@@ -2103,6 +2103,51 @@ def frag_cfo_room() -> None:
         _pf_delta,
     )
 
+    # ── 進階風險指標（期望值 / 平均獲利虧損 / 最大回撤）──────────────────────
+    # 全部由上面已算好的淨損益清單推導，純顯示、不影響任何交易邏輯。
+    _expectancy = (_net_pnl / _total) if _total > 0 else 0.0
+    _avg_win    = (_gross_profit / _wins)   if _wins   > 0 else 0.0
+    _avg_loss   = (_gross_loss   / _losses) if _losses > 0 else 0.0
+    _payoff     = (_avg_win / _avg_loss) if _avg_loss > 0 else 0.0
+
+    # 最大回撤：依平倉時間排序累積淨值，記錄峰值到谷底的最大跌幅
+    def _dd_sort_key(p: dict) -> str:
+        s = str(p.get("closed_at", ""))
+        return s.split()[-1] if s else "00:00:00"
+    _eq = _peak = INITIAL_BALANCE
+    _max_dd = 0.0
+    for _p in sorted(_all_closed, key=_dd_sort_key):
+        _eq += _net_pnl_of(_p)
+        if _eq > _peak:
+            _peak = _eq
+        _dd = _peak - _eq
+        if _dd > _max_dd:
+            _max_dd = _dd
+    _max_dd_pct = (_max_dd / _peak * 100) if _peak > 0 else 0.0
+
+    _rc1, _rc2, _rc3, _rc4 = st.columns(4)
+    _rc1.metric(
+        "📈 期望值 (Expectancy)",
+        f"${_expectancy:+,.2f}",
+        "每筆平均淨損益",
+    )
+    _rc2.metric(
+        "🟢 平均獲利 / 🔴 平均虧損",
+        f"${_avg_win:,.1f} / ${_avg_loss:,.1f}",
+        (f"賠率 {_payoff:.2f}x" if _payoff > 0 else None),
+    )
+    _rc3.metric(
+        "📉 最大回撤 (Max Drawdown)",
+        f"-${_max_dd:,.2f}",
+        (f"-{_max_dd_pct:.2f}% 自峰值" if _max_dd > 0 else "尚無回撤"),
+        delta_color="inverse",
+    )
+    _rc4.metric(
+        "💵 累計手續費成本",
+        f"-${sum(float(p.get('nominal', 0.0) or 0.0) * OPEN_FEE_RATE + float(p.get('close_fee', 0.0) or 0.0) for p in _all_closed):,.2f}",
+        "開倉+平倉手續費合計",
+    )
+
     # ── 資金淨值曲線 (Equity Curve) ──────────────────────────────────────
     st.markdown("<div style='margin-top:0.9rem'></div>", unsafe_allow_html=True)
     st.markdown('<div class="section-header">📈 資金淨值曲線 (Equity Curve)</div>',

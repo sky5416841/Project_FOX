@@ -2,11 +2,14 @@
 
 ★ 2026-06 強化：以「扣手續費後的淨損益」做期望值判讀。
    trade_history 的 pnl 欄位是「毛利（僅價差）」，引擎在平倉時另外扣了
-   開倉/平倉手續費（各 0.05%）與資金費，但那兩者沒寫進資料表。
-   本腳本由 qty = pnl/價差 反推每筆名目，估回手續費，算出「淨損益」，
-   才能回答真正的問題：扣費後到底是正是負。
-   （資金費無法由現有欄位重建，故未計入；對只做多者通常是小額成本，
-     代表「淨損益」其實還略為高估，結論偏樂觀。）
+   開倉/平倉手續費（各 0.05%）與資金費，但那些沒寫進資料表。
+
+   手續費是「精確反推」而非估算：引擎裡 nominal = qty×entry_slipped，
+   存進 DB 的 entry_price 即 entry_slipped，故 qty = pnl/價差 反推後，
+   open_fee = qty×entry×0.05% 與 close_fee = qty×exit×0.05% 與引擎當時
+   實扣的值完全一致。唯一無法重建的是「資金費」（需持倉時長，未入庫），
+   故下面的「淨損益」只少了資金費這一項；對只做多者資金費通常是小額成本，
+   代表淨值仍略偏樂觀，但偏差很小。
 """
 import sqlite3
 
@@ -22,7 +25,8 @@ rows = [dict(r) for r in c.execute(
 
 
 def _enrich_fees(r):
-    """由 qty = pnl / 價差 反推名目，估回來回手續費，補上 net / fees 欄位。"""
+    """由 qty = pnl / 價差 精確反推名目與來回手續費，補上 net / fees 欄位
+    （與引擎當時實扣一致；唯一未計入的是資金費）。"""
     entry = r.get("entry_price") or 0.0
     exit_ = r.get("exit_price") or 0.0
     pnl   = r.get("pnl") or 0.0
@@ -84,7 +88,7 @@ if rows:
     n_wr  = sum(1 for r in rows if r["net"] > 0) / len(rows) * 100
     print("\n【★ 扣費後總結算 ★】")
     print(f"  毛利總計   {g_tot:+10.1f}   (毛勝率 {g_wr:.1f}%)")
-    print(f"  估計手續費 {-f_tot:10.1f}   (來回 {(OPEN_FEE_RATE+CLOSE_FEE_RATE)*100:.2f}% 名目；不含資金費)")
+    print(f"  手續費合計 {-f_tot:10.1f}   (精確反推，來回 {(OPEN_FEE_RATE+CLOSE_FEE_RATE)*100:.2f}% 名目；不含資金費)")
     print(f"  ─────────────────────")
     print(f"  淨利總計   {n_tot:+10.1f}   (淨勝率 {n_wr:.1f}%)")
     print(f"  淨期望值   {n_avg:+10.2f} / 筆")
@@ -131,4 +135,5 @@ print("\n【H. 平倉原因】")
 for reason in set(r["exit_reason"] for r in rows):
     stat(reason, [r for r in rows if r["exit_reason"] == reason])
 
-print("\n（淨均/淨總/淨勝率＝扣手續費後；毛均＝原始價差。資金費未計入，故淨值略偏樂觀。）")
+print("\n（淨均/淨總/淨勝率＝扣手續費後；毛均＝原始價差。手續費為精確反推，"
+      "唯資金費未計入，故淨值略偏樂觀，但偏差很小。）")

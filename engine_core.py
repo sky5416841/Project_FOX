@@ -34,6 +34,7 @@ SNIPER_RSI_LONG        = 30.0
 SNIPER_CCI_SHORT       = 250.0
 SNIPER_VOL_MIN         = 150.0
 SNIPER_TREND_BLOCK_PCT = 3.0
+SNIPER_MIN_SCORE       = 60     # 進場最低共振評分（複盤 2026/6/19 證實 <60 試水單為負期望，已關閉）
 AGENT_LOG_MAX          = 50
 TRAILING_STOP_PCT      = 0.05
 TRAIL_ATR_MULT         = 2.0    # 一般移動停利距離：2×ATR（讓贏單跑）
@@ -383,12 +384,14 @@ def run_sniper(state: dict, settings: dict, scan_rows: list) -> None:
                 continue
 
         score = _calc_resonance_score(rsi, cci, wick_pct, float(vol_surge), side)
+        # 最低評分門檻：複盤(2026/6/19，115 筆)證實 score<60 的「試水」單淨虧 −5183、
+        # 勝率僅 25%，是主要漏財來源；只進 score>=60 的高品質訊號。
+        if score < SNIPER_MIN_SCORE:
+            continue
         if score >= 80:
             dynamic_margin = margin * 1.5
-        elif score >= 60:
+        else:   # 60–79
             dynamic_margin = margin
-        else:
-            dynamic_margin = margin * 0.5
         dynamic_margin = min(dynamic_margin, state["virtual_balance"] * 0.10)
         if dynamic_margin < 1.0:
             continue

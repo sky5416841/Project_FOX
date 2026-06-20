@@ -34,3 +34,7 @@ fox_settings_*.json
 
 # DB 備份檔
 fox_trading_backup_*.db
+
+# CV 產生的資料集與模型（可由 cv_dataset_gen.py 重建，不進版控）
+data_cv/
+cv_model.pt

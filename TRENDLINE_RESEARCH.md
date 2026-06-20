@@ -107,7 +107,8 @@ python trendline_backtest.py   # 跑無未來函數回測，輸出各訊號淨�
 ## 路線圖 Roadmap
 
 - [x] **A. 演算法畫線 + 讀訊號 + 嚴謹回測** ← 本筆記
-- [ ] **B. 電腦視覺**：將 K 線圖批次輸出為資料集，以 A 的演算法標註為 ground truth，訓練 CNN 辨識盤面型態
+- [x] **B. 電腦視覺**：以 A 的演算法自動標註，訓練 CNN 從圖像辨識盤面型態
+      → 見 [CV_CLASSIFIER.md](CV_CLASSIFIER.md)（留一商品交叉驗證 85%）
 - [ ] 多商品 / 多時間框 / 多出場規則的網格回測
 
 ---

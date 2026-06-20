@@ -47,6 +47,32 @@ _COOKIE_SECRET  = os.getenv("COOKIE_SECRET") or hashlib.sha256(
     (os.getenv("GEMINI_API_KEY", "") + os.getenv("API_KEY", "") + "FOX_SALT").encode()
 ).hexdigest()
 
+# ── 登入失敗鎖定（防暴力猜密碼）──────────────────────────────────────────────
+# 模組級狀態：只要 Streamlit 主程序存活就持續累計（跨 rerun 保留）。
+_LOGIN_MAX_FAILS = 5
+_LOGIN_LOCK_SEC  = 600     # 達上限後鎖定 10 分鐘
+_login_attempts: dict[str, dict] = {}   # username -> {"fails": int, "until": epoch}
+
+
+def _login_locked_remaining(username: str) -> int:
+    """回傳該帳號剩餘鎖定秒數；未鎖定回傳 0。"""
+    rec = _login_attempts.get((username or "").strip())
+    return max(0, int(rec["until"] - time.time())) if rec else 0
+
+
+def _login_record_fail(username: str) -> None:
+    """記一次失敗；達上限則上鎖並歸零計數。"""
+    rec = _login_attempts.setdefault((username or "").strip(), {"fails": 0, "until": 0})
+    rec["fails"] += 1
+    if rec["fails"] >= _LOGIN_MAX_FAILS:
+        rec["until"] = time.time() + _LOGIN_LOCK_SEC
+        rec["fails"] = 0
+
+
+def _login_clear(username: str) -> None:
+    """登入成功後清除該帳號的失敗記錄。"""
+    _login_attempts.pop((username or "").strip(), None)
+
 
 def _make_auth_token(user_id: int, username: str) -> str:
     """生成 HMAC-SHA256 簽名的認證 token，格式：uid:username:expiry:sig"""
@@ -1209,21 +1235,27 @@ if not st.session_state.get("logged_in", False):
                     "🔐 登入指揮中心", type="primary", use_container_width=True
                 )
             if _login_btn:
-                _uid, _verified = verify_user(_username, _password)
-                if _uid is None:
-                    st.error("❌ 帳號或密碼錯誤，請重試。")
-                elif not _verified:
-                    st.warning("⚠️ 帳號尚未驗證。請前往信箱點擊驗證連結後再登入。")
+                _lock = _login_locked_remaining(_username)
+                if _lock > 0:
+                    st.error(f"🔒 登入失敗次數過多，帳號已暫時鎖定，請於約 {_lock // 60 + 1} 分鐘後再試。")
                 else:
-                    st.session_state.logged_in  = True
-                    st.session_state.user_id    = _uid
-                    st.session_state.username   = _username.strip()
-                    _write_cookie(
-                        _COOKIE_NAME,
-                        _make_auth_token(_uid, _username.strip()),
-                        _COOKIE_DAYS * 86400,
-                    )
-                    st.rerun()
+                    _uid, _verified = verify_user(_username, _password)
+                    if _uid is None:
+                        _login_record_fail(_username)
+                        st.error("❌ 帳號或密碼錯誤，請重試。")
+                    elif not _verified:
+                        st.warning("⚠️ 帳號尚未驗證。請前往信箱點擊驗證連結後再登入。")
+                    else:
+                        _login_clear(_username)
+                        st.session_state.logged_in  = True
+                        st.session_state.user_id    = _uid
+                        st.session_state.username   = _username.strip()
+                        _write_cookie(
+                            _COOKIE_NAME,
+                            _make_auth_token(_uid, _username.strip()),
+                            _COOKIE_DAYS * 86400,
+                        )
+                        st.rerun()
 
         with _tab_register:
             with st.form("fox_register"):

@@ -19,6 +19,16 @@
 
 ---
 
+## 📚 研究作品 Research Journal
+
+> 一場「誠實尋找交易 edge」的系統性研究。先看總覽，有興趣再深入子題。
+
+- **[量化研究 Journal](QUANT_RESEARCH.md)** ⭐ — 總覽頁：用扣費／無未來函數／統計檢定／反 p-hacking 等紀律測試多種策略，誠實呈現「皆無可靠 edge」的結論。**展現研究成熟度，建議先讀這份。**
+- **[趨勢線研究](TRENDLINE_RESEARCH.md)** — 自動趨勢線偵測 + 讀進出場訊號 + 無未來函數回測
+- **[CV 盤面辨識](CV_CLASSIFIER.md)** — CNN 從 K 線圖辨識盤面型態（留一商品交叉驗證 85% + 學習曲線 + Grad-CAM 可解釋性）
+
+---
+
 ## 設計哲學 Design Philosophy
 
 Project F.O.X. 不是價格提醒工具，而是一套具備**完整交易生命週期管理**能力的量化研究平台。

@@ -2207,6 +2207,42 @@ def frag_cfo_room() -> None:
     )
 
 
+@st.fragment(run_every=600)   # 資金費每 8h 結算，10 分鐘刷新足夠
+def frag_funding_radar() -> None:
+    """資金費行情雷達：唯一有條件 edge 的方向(資金費套利)的時機偵測。
+    平常喊『觀望』，市場狂熱(多單擁擠、資金費全面飆高)時喊『部署』。"""
+    import numpy as _np
+    st.markdown('<div class="section-header">📡 資金費行情雷達 (Funding Regime Radar)</div>',
+                unsafe_allow_html=True)
+    st.caption("市場中性策略(收資金費)的時機偵測 — 平常觀望、狂熱才部署。判讀門檻為啟發式，僅供相對參考。")
+    try:
+        from funding_regime import snapshot, verdict, PERIODS_YEAR
+        ex = get_exchange()
+        v = snapshot(ex)
+        ann = v * PERIODS_YEAR
+        ann_avg = float(_np.mean(ann)); ann_med = float(_np.median(ann))
+        breadth = float((v > 0).mean() * 100)
+        n_hot = int((ann > 30).sum())
+        head, note = verdict(ann_avg, breadth)
+        _color = "#22c55e" if head.startswith("🔥") else \
+                 "#f59e0b" if ("部署" in head or "微溫" in head) else "#64748b"
+        _c1, _c2, _c3 = st.columns(3)
+        _c1.metric("市場平均年化資金費", f"{ann_avg:+.1f}%", f"中位數 {ann_med:+.1f}%")
+        _c2.metric("資金費為正比例(廣度)", f"{breadth:.0f}%", f"肥幣(>30%) {n_hot} 個")
+        _c3.metric("掃描永續合約數", f"{len(v)}")
+        st.markdown(
+            f'<div style="background:{_color}1a;border:1px solid {_color};border-radius:8px;'
+            f'padding:0.8rem 1rem;margin-top:0.4rem">'
+            f'<span style="font-size:1.05rem;color:{_color};font-weight:600">{head}</span><br>'
+            f'<span style="font-size:0.85rem;color:#94a3b8">{note}</span></div>',
+            unsafe_allow_html=True)
+        if ann_avg > 8:
+            st.caption(f"若現在部署，預估扣摩擦後年化 ≈ {ann_avg*0.6:.0f}%（粗估）。真要做仍需處理對沖/爆倉/借貸。")
+        st.caption(f"更新：{datetime.now().strftime('%H:%M:%S')} · 每 10 分鐘自動刷新")
+    except Exception as _e:
+        st.warning(f"雷達暫時取不到資料：{_e}")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # RENDER — 三分頁版面架構
 # 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
@@ -2228,6 +2264,8 @@ with _tab1:
 
 # ── Tab 2：天眼雷達 ────────────────────────────────────────────────────────
 with _tab2:
+    frag_funding_radar()    # 資金費行情雷達：市場中性策略時機偵測 (10min)
+    st.divider()
     frag_scanner()          # 全網廣域雷達 Top 30 (20s)
 
 # ── Tab 3：持倉與結算 ──────────────────────────────────────────────────────

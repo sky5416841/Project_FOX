@@ -34,7 +34,8 @@ SNIPER_RSI_LONG        = 30.0
 SNIPER_CCI_SHORT       = 250.0
 SNIPER_VOL_MIN         = 150.0
 SNIPER_TREND_BLOCK_PCT = 3.0
-SNIPER_MIN_SCORE       = 60     # 進場最低共振評分（複盤 2026/6/19 證實 <60 試水單為負期望，已關閉）
+SNIPER_MIN_SCORE       = 20     # 進場最低共振評分（=全收：門檻掃描證實 score≥60 反而更糟且太稀有，
+                                #  放寬讓沙盒跑得夠多以觀察 regression；此版無 edge，純教學觀察用）
 AGENT_LOG_MAX          = 50
 TRAILING_STOP_PCT      = 0.05
 TRAIL_ATR_MULT         = 2.0    # 一般移動停利距離：2×ATR（讓贏單跑）

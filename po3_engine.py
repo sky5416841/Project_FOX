@@ -195,6 +195,52 @@ def run_po3_pipeline(df, symbol="?", tf="?") -> pd.DataFrame:
     return pd.DataFrame(rows, columns=cols), boxes, events
 
 
+# ---------------------------------------------------------------- 即時訊號介面
+def get_live_signal(df) -> dict | None:
+    """
+    即時訊號產生器:只看『最新完成的那根 K 線』是否剛觸發 PO3 掃針。
+
+    用法(live):傳入到目前為止的 OHLCV(最後一列 = 剛收完的 K 棒)。
+    若最新棒在某個自適應盤整框後 HUNT_BARS 內、刺破框緣又收回框內、
+    且影線屬統計異常 → 回傳:
+      {'signal':'SHORT'/'LONG', 'entry_price', 'sl', 'tp', 'box_low', 'box_high'}
+    否則回傳 None。
+
+    ★ 純訊號邏輯,不下單、不碰任何帳本/狀態 —— 下單與否由呼叫端決定。
+      仍提醒:此類訊號扣費後負期望已被回測釘死,接到實盤迴圈前請三思。
+    """
+    df = df.reset_index(drop=True)
+    n = len(df)
+    if n < QUANTILE_LB:
+        return None
+    k = n - 1                                   # 最新完成的 K 棒
+    boxes = _adaptive_boxes(df)
+    # 找「在 k 之前、且 k 落在其 HUNT_BARS 狩獵窗內」的最近一個框
+    cand = [b for b in boxes if b[1] < k <= b[1] + HUNT_BARS]
+    if not cand:
+        return None
+    i0, i1, bh, bl = max(cand, key=lambda b: b[1])
+
+    up_wick, dn_wick, up_thr, dn_thr = _wick_thresholds(df)
+    if not (np.isfinite(up_thr[k]) and np.isfinite(dn_thr[k])):
+        return None
+    o, h, l, c = (df["open"].iat[k], df["high"].iat[k], df["low"].iat[k], df["close"].iat[k])
+
+    # 上緣誘多掃針 → 看跌做空
+    if h > bh * (1 + PIERCE_MIN) and c < bh and up_wick[k] >= up_thr[k]:
+        return {"signal": "SHORT", "entry_price": round(float(c), 4),
+                "sl": round(h * (1 + SL_BUFFER), 4), "tp": round(float(bl), 4),
+                "box_low": round(float(bl), 4), "box_high": round(float(bh), 4),
+                "wick": round(float(up_wick[k]), 4), "wick_thr": round(float(up_thr[k]), 4)}
+    # 下緣誘空掃針 → 看漲做多
+    if l < bl * (1 - PIERCE_MIN) and c > bl and dn_wick[k] >= dn_thr[k]:
+        return {"signal": "LONG", "entry_price": round(float(c), 4),
+                "sl": round(l * (1 - SL_BUFFER), 4), "tp": round(float(bh), 4),
+                "box_low": round(float(bl), 4), "box_high": round(float(bh), 4),
+                "wick": round(float(dn_wick[k]), 4), "wick_thr": round(float(dn_thr[k]), 4)}
+    return None
+
+
 # ---------------------------------------------------------------- 畫圖(監工用)
 def plot(df, boxes, events, symbol, tf, fname):
     fig, ax = plt.subplots(figsize=(16, 8))

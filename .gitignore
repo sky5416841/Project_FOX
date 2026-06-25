@@ -45,3 +45,6 @@ po3_paper_closed.csv
 po3_paper_trader.log
 ml_lab/fox_ml_model.pkl
 ml_lab/live_ml_features.csv
+
+# 個人面試小抄(私人,不公開)
+*面試*.md

@@ -253,16 +253,46 @@ flowchart TD
 
 ```
 Project_FOX/
-├── dashboard.py              # 主控台（Streamlit，~1,950 行）
-├── database.py               # SQLite 多使用者持久化層
-├── ai_copilot.py             # AI 副駕「狐影」（Text-to-SQL）
-├── main.py                   # CLI 警報雷達（純 stdlib）
+├── 主系統 ──────────────────────────────────────────────
+│   ├── dashboard.py              # 主控台（Streamlit，含 PO3 觀測室分頁）
+│   ├── engine_core.py            # 背景常駐交易引擎（與瀏覽器分頁解耦）
+│   ├── database.py               # SQLite 多使用者持久化層
+│   ├── ai_copilot.py             # AI 副駕「狐影」（Text-to-SQL）
+│   ├── email_service.py          # 通知信寄送
+│   ├── main.py                   # CLI 警報雷達（純 stdlib）
+│   └── analyze_entries.py        # 進場條件複盤分析
 │
-├── Dockerfile                # Multi-stage build，python:3.11-slim
-├── docker-compose.yml        # fox-app 服務，Named Volume fox-data
-├── .dockerignore             # 排除 .env / db / venv / __pycache__
-├── requirements.txt          # 7 個依賴套件
-└── .env                      # 金鑰設定（不納入版控）
+├── PO3 自適應 + 訂單流 + 即時系統 ───────────────────────
+│   ├── po3_accumulation.py       # 第一課：盤整框偵測
+│   ├── po3_manipulation.py       # 第二/三課：掃針 + 前向追蹤（MFE/MAE）
+│   ├── po3_engine.py             # 自適應引擎（零硬編碼，分位數定義結構）
+│   ├── data_pipeline.py          # 訂單流：Delta / CVD / OBI 雙過濾器
+│   ├── po3_paper_trader.py       # 全自動紙上交易員 + ML 特徵孵化器（24 市場）
+│   └── start_po3_trader.bat/.vbs # 常駐啟動（登入自啟、崩潰自重啟）
+│
+├── ml_lab/  機器學習實驗室 ──────────────────────────────
+│   ├── ml_data_prep.py           # 考題產生器（OHLCV 特徵 + 2R/1R 標籤）
+│   ├── ml_train.py               # RandomForest + 基準對照 + 特徵重要性
+│   ├── ml_advanced_trainer_template.py  # TimeSeriesSplit + 類別平衡骨架
+│   ├── live_logger.py            # 即時訂單流特徵孵化 + 延遲打標
+│   └── README.md                 # ⚠ 模型狀態：孵化中、未上線
+│
+├── 研究腳本（見 QUANT_RESEARCH.md）─────────────────────
+│   ├── trendline_lab.py / trendline_backtest.py    # 趨勢線
+│   ├── cv_dataset_gen.py / cv_train.py / cv_explain.py / cv_learning_curve.py  # CNN 盤面辨識
+│   ├── choch_research.py / choch_multimarket.py    # CHoCH 結構
+│   ├── smc_lab.py / rop_backtest.py / smc_strategy_backtest.py  # SMC / ROP
+│   ├── score_backtest.py / score_threshold_sweep.py / exit_research.py / oos_validation.py  # 評分門檻 / 出場 / 樣本外
+│   └── funding_research.py / funding_conditional.py / funding_regime.py  # 資金費套利
+│
+├── 文件 ────────────────────────────────────────────────
+│   ├── QUANT_RESEARCH.md         # ⭐ 研究總覽（入口頁）
+│   ├── PO3_ORDERFLOW.md / TRENDLINE_RESEARCH.md / CV_CLASSIFIER.md
+│
+└── 部署 ────────────────────────────────────────────────
+    ├── Dockerfile / docker-compose.yml / .dockerignore
+    ├── requirements.txt
+    └── .env                      # 金鑰設定（不納入版控）
 ```
 
 ---

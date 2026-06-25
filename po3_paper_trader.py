@@ -69,8 +69,17 @@ def make_exchange():
     return ccxt.binance({"options": {"defaultType": "future"}, "enableRateLimit": True})
 
 
-def fetch_live(ex, symbol, tf, limit=500) -> pd.DataFrame:
-    raw = ex.fetch_ohlcv(symbol, tf, limit=limit)
+def fetch_live(ex, symbol, tf, limit=500, retries=2) -> pd.DataFrame:
+    # 重試:每輪迴圈第一個請求常因 keep-alive socket 閒置 300s 後失效而逾時,
+    # 重連再抓即可(故 BTC/5m 這種清單第一個市場原本會固定逾時掉資料)。
+    for attempt in range(retries + 1):
+        try:
+            raw = ex.fetch_ohlcv(symbol, tf, limit=limit)
+            break
+        except Exception:
+            if attempt >= retries:
+                raise
+            time.sleep(1.0)
     # 丟掉最後一根「未收完」的 K 棒,只用已完成的(避免偷看未完成價)
     df = pd.DataFrame(raw, columns=["ts", "open", "high", "low", "close", "vol"])
     return df.iloc[:-1].reset_index(drop=True)

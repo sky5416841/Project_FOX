@@ -44,7 +44,7 @@ SL_BUFFER = 0.0003       # 停損放在掃針極值外的微小緩衝(0.03%)
 MAX_HOLD = 60            # 最多往前追蹤幾根 K 線(逾時 = 沒結果,以收盤平倉)
 
 
-CACHE = "po3_data.csv"   # 凍結資料:天選之針要可重現,就不能每次抓即時最新K線
+CACHE = "assets/po3_data.csv"   # 凍結資料:天選之針要可重現,就不能每次抓即時最新K線
 
 
 def fetch():
@@ -279,8 +279,8 @@ def main():
     ax.set_title(f"{SYMBOL} {TF} — PO3 第二課:操縱/假突破偵測(掃針後收回框內 = 流動性掠奪)", fontsize=13)
     ax.set_xlabel("K 線序號"); ax.set_ylabel("價格"); ax.legend(loc="best", fontsize=9)
     ax.grid(alpha=0.12)
-    fig.tight_layout(); fig.savefig("po3_manipulation.png", dpi=110)
-    print("✓ 已輸出 po3_manipulation.png")
+    fig.tight_layout(); fig.savefig("assets/po3_manipulation.png", dpi=110)
+    print("✓ 已輸出 assets/po3_manipulation.png")
 
 
 if __name__ == "__main__":

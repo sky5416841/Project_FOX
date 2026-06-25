@@ -30,7 +30,7 @@
 
 | 上升 up | 下降 down | 盤整 range |
 |:---:|:---:|:---:|
-| ![up](cv_samples/sample_up.png) | ![down](cv_samples/sample_down.png) | ![range](cv_samples/sample_range.png) |
+| ![up](assets/cv_samples/sample_up.png) | ![down](assets/cv_samples/sample_down.png) | ![range](assets/cv_samples/sample_range.png) |
 
 ### 2️⃣ `cv_train.py` — 訓練 + 嚴謹評估
 - 小型 CNN（3 層卷積，灰階 64×64，CPU 可訓練）
@@ -73,7 +73,7 @@
 
 `cv_learning_curve.py` 記錄每個 epoch 的訓練/驗證準確率與 loss（驗證用沒參與訓練的 XRP）。
 
-![學習曲線](cv_learning_curve.png)
+![學習曲線](assets/cv_learning_curve.png)
 
 - 前幾個 epoch 兩線一起爬上基準線之上 → **真的在學**。
 - 但 ~epoch 10 後**訓練準確率→100%、訓練 loss→0，而驗證 loss 反而上升**、兩線分岔
@@ -87,7 +87,7 @@
 
 `cv_explain.py` 用 Grad-CAM 產生熱力圖，標出模型判斷時最關注的區域（紅=高關注）。
 
-![Grad-CAM](cv_gradcam.png)
+![Grad-CAM](assets/cv_gradcam.png)
 
 **這同時是「誠實檢查」**：若熱點落在空白角落或某種假影 → 模型在作弊、85% 不可信；
 實際上熱點全部落在**蠟燭走勢結構**上（上升圖集中在底部轉折與拉升段、盤整圖沿波動散布），

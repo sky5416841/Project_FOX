@@ -80,8 +80,8 @@ def main():
     ax.set_title(f"{SYMBOL} {TF} — PO3 第一課:盤整區偵測(藍框=散戶停損池)", fontsize=13)
     ax.set_xlabel("K 線序號"); ax.set_ylabel("價格"); ax.legend(loc="best", fontsize=9)
     ax.grid(alpha=0.12)
-    fig.tight_layout(); fig.savefig("po3_accumulation.png", dpi=110)
-    print("✓ 已輸出 po3_accumulation.png")
+    fig.tight_layout(); fig.savefig("assets/po3_accumulation.png", dpi=110)
+    print("✓ 已輸出 assets/po3_accumulation.png")
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ MAX_HOLD    = 60      # 前向追蹤上限(根)
 # ---------------------------------------------------------------- 資料
 def fetch(symbol, tf, limit=500):
     """抓 + 凍結(每個 市場/時框 一份快取,標本才可重現)。"""
-    cache = f"po3_data_{symbol.replace('/', '')}_{tf}.csv"
+    cache = f"assets/po3_data_{symbol.replace('/', '')}_{tf}.csv"
     if os.path.exists(cache):
         return pd.read_csv(cache)
     ex = ccxt.binance({"options": {"defaultType": "future"}, "enableRateLimit": True})
@@ -290,7 +290,7 @@ def main():
     for symbol, tf in targets:
         df = fetch(symbol, tf)
         res, boxes, events = run_po3_pipeline(df, symbol, tf)
-        fname = f"po3_engine_{symbol.replace('/', '')}_{tf}.png"
+        fname = f"assets/po3_engine_{symbol.replace('/', '')}_{tf}.png"
         plot(df, boxes, events, symbol, tf, fname)
         print(f"\n■ {symbol} {tf}  ({len(df)}根) → 框 {len(boxes)} 個,訊號 {len(res)} 個 → {fname}")
         if len(res):
@@ -303,8 +303,8 @@ def main():
         r = agg["realized_r"]
         wins = int((r > 0).sum())
         print(f"跨市場合計 n={len(agg)}  勝 {wins}/{len(agg)}  總計 {r.sum():+.2f}R  平均 {r.mean():+.2f}R/筆")
-        agg.to_csv("po3_engine_signals.csv", index=False)
-        print("✓ 全訊號表 → po3_engine_signals.csv")
+        agg.to_csv("assets/po3_engine_signals.csv", index=False)
+        print("✓ 全訊號表 → assets/po3_engine_signals.csv")
     print("⚠ 自適應 ≠ edge:分位數/回看窗仍是參數,n 仍小。作品價值=跨市場通用特徵工程,非賺錢。")
 
 

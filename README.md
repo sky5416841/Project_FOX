@@ -289,6 +289,9 @@ Project_FOX/
 │   ├── QUANT_RESEARCH.md         # ⭐ 研究總覽（入口頁）
 │   ├── PO3_ORDERFLOW.md / TRENDLINE_RESEARCH.md / CV_CLASSIFIER.md
 │
+├── assets/  研究結果圖與凍結資料 ───────────────────────
+│   └── *.png（盤面圖/學習曲線/Grad-CAM）、po3_data*.csv（凍結標本）
+│
 └── 部署 ────────────────────────────────────────────────
     ├── Dockerfile / docker-compose.yml / .dockerignore
     ├── requirements.txt

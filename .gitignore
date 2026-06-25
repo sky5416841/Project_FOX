@@ -51,3 +51,6 @@ ml_lab/live_ml_features.csv
 
 # Obsidian vault 設定(本機筆記用,不公開)
 .obsidian/
+
+# 研究腳本重跑時掉在 root 的散圖(正式產物在 assets/)
+/*.png

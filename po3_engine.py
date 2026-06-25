@@ -242,7 +242,8 @@ def get_live_signal(df) -> dict | None:
 
 
 # ---------------------------------------------------------------- 畫圖(監工用)
-def plot(df, boxes, events, symbol, tf, fname):
+def build_figure(df, boxes, events, symbol, tf):
+    """建構並回傳 matplotlib Figure(供網頁 st.pyplot 直接渲染,不存檔)。"""
     fig, ax = plt.subplots(figsize=(16, 8))
     for i, r in df.iterrows():
         col = "#26a69a" if r["close"] >= r["open"] else "#ef5350"
@@ -272,7 +273,14 @@ def plot(df, boxes, events, symbol, tf, fname):
     ax.scatter([], [], marker="^", color="#2e7d32", label="統計異常掃針→看漲")
     ax.set_title(f"{symbol} {tf} — PO3 自適應引擎(零硬編碼,分位數自定義結構)", fontsize=13)
     ax.set_xlabel("K 線序號"); ax.set_ylabel("價格"); ax.legend(loc="best", fontsize=9); ax.grid(alpha=0.12)
-    fig.tight_layout(); fig.savefig(fname, dpi=110); plt.close(fig)
+    fig.tight_layout()
+    return fig
+
+
+def plot(df, boxes, events, symbol, tf, fname):
+    """離線用:建圖後存成 png。"""
+    fig = build_figure(df, boxes, events, symbol, tf)
+    fig.savefig(fname, dpi=110); plt.close(fig)
 
 
 # ---------------------------------------------------------------- 多市場示範

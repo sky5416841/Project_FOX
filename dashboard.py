@@ -2541,6 +2541,31 @@ with _tab5:
         except FileNotFoundError:
             st.caption("尚無已平倉紀錄（`po3_paper_closed.csv` 未生成）。")
 
+        # ── 即時盤面分析圖（自適應框 + 掃針 + R 路徑）──────────────────────
+        st.divider()
+        st.markdown("##### 🗺️ 即時盤面分析圖")
+        st.caption("按下後抓最新 500 根 K 線，跑自適應引擎畫出『盤整框＋統計異常掃針＋擴張路徑』"
+                   "（與離線 `po3_engine.py` 同一套偵測邏輯）。手動觸發以免每次刷新狂打 API。")
+        _pc1, _pc2 = st.columns([1, 1])
+        with _pc1:
+            _po3_sym = st.selectbox("市場", ["BTC/USDT", "ETH/USDT"], key="po3_chart_sym")
+        with _pc2:
+            _po3_tf = st.selectbox("時間框", ["5m", "15m"], key="po3_chart_tf")
+        if st.button("🗺️ 繪製當前盤面", key="po3_chart_btn"):
+            with st.spinner(f"抓取 {_po3_sym} {_po3_tf} 並分析中…"):
+                try:
+                    import po3_engine as _po3eng
+                    _ex = engine_core.make_exchange()
+                    _raw = _ex.fetch_ohlcv(_po3_sym, _po3_tf, limit=500)
+                    _pdf = pd.DataFrame(_raw, columns=["ts", "open", "high", "low", "close", "vol"])
+                    _res, _boxes, _events = _po3eng.run_po3_pipeline(_pdf, _po3_sym, _po3_tf)
+                    _fig = _po3eng.build_figure(_pdf, _boxes, _events, _po3_sym, _po3_tf)
+                    st.pyplot(_fig, width="stretch")
+                    st.caption(f"偵測到 {len(_boxes)} 個盤整框、{len(_res)} 個掃針訊號"
+                               f"（此圖為當下歷史分析，非交易員實際持倉）。")
+                except Exception as _e:
+                    st.error(f"繪圖失敗：{_e}")
+
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────
 st.markdown("---")

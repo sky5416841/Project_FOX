@@ -27,6 +27,7 @@
 | **CHoCH 結構破壞**（SMC） | 12 幣 × 3 時間框、固定參數、229 筆 | 顯著負（t=−2.48）；小樣本的「微光」擴大後消失 | `choch_research.py` / `choch_multimarket.py` |
 | **score≥60 進場規則** | 48000 根歷史 K 線重建引擎邏輯 | 訊號稀有(僅24個)且負/打平；用回測取代兩個月實盤等待 | `score_backtest.py` |
 | **CNN 盤面辨識** | 留一商品交叉驗證 | 描述性分類 85%（有效）；但**辨識≠預測**，不等於可獲利 | [CV_CLASSIFIER.md](CV_CLASSIFIER.md) |
+| **PO3 + 訂單流**（SMC 假突破 + Delta/OBI 微觀結構） | 自適應引擎跨市場 + 純 ROP 大樣本回測 | 純 ROP n=2041 **t=−12.27**；加結構過濾不升反降（t=−3.98）→ context=edge 證偽 | [PO3_ORDERFLOW.md](PO3_ORDERFLOW.md) |
 
 → **以上「預測方向」類訊號，沒有任何一個通過「扣費後顯著為正」的門檻。**
 

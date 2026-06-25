@@ -2548,9 +2548,9 @@ with _tab5:
                    "（與離線 `po3_engine.py` 同一套偵測邏輯）。手動觸發以免每次刷新狂打 API。")
         _pc1, _pc2 = st.columns([1, 1])
         with _pc1:
-            _po3_sym = st.selectbox("市場", ["BTC/USDT", "ETH/USDT"], key="po3_chart_sym")
+            _po3_sym = st.selectbox("市場", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "ADA/USDT"], key="po3_chart_sym")
         with _pc2:
-            _po3_tf = st.selectbox("時間框", ["5m", "15m"], key="po3_chart_tf")
+            _po3_tf = st.selectbox("時間框", ["5m", "15m", "1h", "4h"], key="po3_chart_tf")
         if st.button("🗺️ 繪製當前盤面", key="po3_chart_btn"):
             with st.spinner(f"抓取 {_po3_sym} {_po3_tf} 並分析中…"):
                 try:

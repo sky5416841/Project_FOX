@@ -22,10 +22,10 @@
 
 | 訊號 / 策略 | 方法 | 結果 | 詳見 |
 |---|---|---|---|
-| **共振評分策略**（RSI/爆量接刀） | 115 筆實盤紙上交易複盤 | 淨虧、勝率 28%、t 未顯著但持續為負；發現 score<60 大虧 → 加門檻 | 主程式 `analyze_entries.py` |
+| **共振評分策略**（RSI/爆量接刀） | 115 筆實盤紙上交易複盤 | 淨虧、勝率 28%、t 未顯著但持續為負；發現 score<60 大虧 → 加門檻 | 主程式 `research/analyze_entries.py` |
 | **趨勢線訊號**（突破壓力/接近支撐做多） | 無未來函數回測 vs 對照組 | 顯著負、且**不優於隨機進場** | [TRENDLINE_RESEARCH.md](TRENDLINE_RESEARCH.md) |
-| **CHoCH 結構破壞**（SMC） | 12 幣 × 3 時間框、固定參數、229 筆 | 顯著負（t=−2.48）；小樣本的「微光」擴大後消失 | `choch_research.py` / `choch_multimarket.py` |
-| **score≥60 進場規則** | 48000 根歷史 K 線重建引擎邏輯 | 訊號稀有(僅24個)且負/打平；用回測取代兩個月實盤等待 | `score_backtest.py` |
+| **CHoCH 結構破壞**（SMC） | 12 幣 × 3 時間框、固定參數、229 筆 | 顯著負（t=−2.48）；小樣本的「微光」擴大後消失 | `research/choch_research.py` / `choch_multimarket.py` |
+| **score≥60 進場規則** | 48000 根歷史 K 線重建引擎邏輯 | 訊號稀有(僅24個)且負/打平；用回測取代兩個月實盤等待 | `research/score_backtest.py` |
 | **CNN 盤面辨識** | 留一商品交叉驗證 | 描述性分類 85%（有效）；但**辨識≠預測**，不等於可獲利 | [CV_CLASSIFIER.md](CV_CLASSIFIER.md) |
 | **PO3 + 訂單流**（SMC 假突破 + Delta/OBI 微觀結構） | 自適應引擎跨市場 + 純 ROP 大樣本回測 | 純 ROP n=2041 **t=−12.27**；加結構過濾不升反降（t=−3.98）→ context=edge 證偽 | [PO3_ORDERFLOW.md](PO3_ORDERFLOW.md) |
 | **PO3 + 機器學習**（RandomForest 預測勝負） | 250 筆掃針、OHLCV 特徵、時間序列切分 | 模型 Acc 0.45 **< 多數類基準 0.667**；Win precision≈base rate → 無預測 alpha | [PO3_ORDERFLOW.md](PO3_ORDERFLOW.md#四之二ml-延伸讓模型自己學結果還是誠實打臉) |

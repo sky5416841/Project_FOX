@@ -100,8 +100,8 @@
 
 ```bash
 pip install ccxt numpy pandas matplotlib
-python trendline_lab.py        # 產生標註趨勢線的 K 線圖 (PNG)
-python trendline_backtest.py   # 跑無未來函數回測，輸出各訊號淨期望
+python research/trendline_lab.py        # 產生標註趨勢線的 K 線圖 (PNG)
+python research/trendline_backtest.py   # 跑無未來函數回測，輸出各訊號淨期望
 ```
 
 ## 路線圖 Roadmap

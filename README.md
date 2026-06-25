@@ -26,6 +26,7 @@
 - **[量化研究 Journal](QUANT_RESEARCH.md)** ⭐ — 總覽頁：用扣費／無未來函數／統計檢定／反 p-hacking 等紀律測試多種策略，誠實呈現「皆無可靠 edge」的結論。**展現研究成熟度，建議先讀這份。**
 - **[趨勢線研究](TRENDLINE_RESEARCH.md)** — 自動趨勢線偵測 + 讀進出場訊號 + 無未來函數回測
 - **[CV 盤面辨識](CV_CLASSIFIER.md)** — CNN 從 K 線圖辨識盤面型態（留一商品交叉驗證 85% + 學習曲線 + Grad-CAM 可解釋性）
+- **[PO3 + 訂單流](PO3_ORDERFLOW.md)** — 把 SMC 主觀手法量化成自適應特徵工程：零硬編碼引擎跨市場泛化 + Delta/OBI 微觀結構雙過濾；含「懂取捨：刻意不做流動性獵殺/Killzone」的工程判斷
 
 ---
 

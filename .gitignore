@@ -44,3 +44,4 @@ po3_paper_state.json
 po3_paper_closed.csv
 po3_paper_trader.log
 ml_lab/fox_ml_model.pkl
+ml_lab/live_ml_features.csv

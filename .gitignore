@@ -42,3 +42,4 @@ cv_model.pt
 # PO3 紙上交易員 runtime 帳本(每機獨立,不入庫)
 po3_paper_state.json
 po3_paper_closed.csv
+po3_paper_trader.log

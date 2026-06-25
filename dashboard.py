@@ -2554,17 +2554,45 @@ with _tab5:
         if st.button("🗺️ 繪製當前盤面", key="po3_chart_btn"):
             with st.spinner(f"抓取 {_po3_sym} {_po3_tf} 並分析中…"):
                 try:
+                    from io import BytesIO
                     import po3_engine as _po3eng
                     _ex = engine_core.make_exchange()
                     _raw = _ex.fetch_ohlcv(_po3_sym, _po3_tf, limit=500)
                     _pdf = pd.DataFrame(_raw, columns=["ts", "open", "high", "low", "close", "vol"])
                     _res, _boxes, _events = _po3eng.run_po3_pipeline(_pdf, _po3_sym, _po3_tf)
                     _fig = _po3eng.build_figure(_pdf, _boxes, _events, _po3_sym, _po3_tf)
-                    st.pyplot(_fig, width="stretch")
-                    st.caption(f"偵測到 {len(_boxes)} 個盤整框、{len(_res)} 個掃針訊號"
-                               f"（此圖為當下歷史分析，非交易員實際持倉）。")
+                    _png_buf = BytesIO()
+                    _fig.savefig(_png_buf, format="png", dpi=110, bbox_inches="tight")
+                    # 結果存進 session_state → 按下載觸發 rerun 時圖表不會消失
+                    st.session_state.po3_chart = {
+                        "png": _png_buf.getvalue(),
+                        "csv": _res.to_csv(index=False).encode("utf-8-sig") if len(_res) else None,
+                        "fname": f"{_po3_sym.replace('/', '_')}_{_po3_tf}_PO3_Analysis",
+                        "n_box": len(_boxes), "n_sig": len(_res),
+                    }
                 except Exception as _e:
-                    st.error(f"繪圖失敗：{_e}")
+                    st.session_state.po3_chart = {"error": str(_e)}
+
+        _chart = st.session_state.get("po3_chart")
+        if _chart and "error" in _chart:
+            st.error(f"繪圖失敗：{_chart['error']}")
+        elif _chart:
+            st.image(_chart["png"], width="stretch")
+            st.caption(f"偵測到 {_chart['n_box']} 個盤整框、{_chart['n_sig']} 個掃針訊號"
+                       f"（此圖為當下歷史分析，非交易員實際持倉）。")
+            _dl1, _dl2 = st.columns([1, 1])
+            with _dl1:
+                st.download_button("🖼️ 下載分析圖表 (PNG)", data=_chart["png"],
+                                   file_name=f"{_chart['fname']}.png", mime="image/png",
+                                   width="stretch", key="po3_dl_png")
+            with _dl2:
+                if _chart["csv"] is not None:
+                    st.download_button("📄 下載特徵數據 (CSV)", data=_chart["csv"],
+                                       file_name=f"{_chart['fname']}.csv", mime="text/csv",
+                                       width="stretch", key="po3_dl_csv")
+                else:
+                    st.button("📄 無掃針訊號可匯出", disabled=True,
+                              width="stretch", key="po3_dl_csv_disabled")
 
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────

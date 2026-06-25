@@ -31,7 +31,10 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ml_lab
 import live_logger as mllog
 
 # === 帳戶與風控設定 ===
-MARKETS      = [("BTC/USDT", "5m"), ("ETH/USDT", "5m")]
+MARKETS      = [(s, tf) for s in ["BTC/USDT", "ETH/USDT", "SOL/USDT", "ADA/USDT",
+                                  "BNB/USDT", "XRP/USDT", "DOGE/USDT", "AVAX/USDT",
+                                  "LINK/USDT", "LTC/USDT", "DOT/USDT", "TRX/USDT"]
+                for tf in ["5m", "15m"]]   # 12幣×2時框=24市場,擴大孵化吞吐(不動特徵邏輯→不漂移)
 START_EQUITY = 10_000.0
 RISK_PCT     = 0.01      # 每筆風險 = 權益 × 1%(打到 SL 約虧 1R)
 LEVERAGE     = 5         # 僅影響保證金占用顯示;盈虧由 qty×價差決定

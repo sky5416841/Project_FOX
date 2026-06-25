@@ -2248,7 +2248,8 @@ def frag_funding_radar() -> None:
 # 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
 # 無論使用者停在哪個 Tab，session_state 寫入與資料更新均持續進行。
 # ═════════════════════════════════════════════════════════════════════════════
-_tab1, _tab2, _tab3, _tab4 = st.tabs(["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕"])
+_tab1, _tab2, _tab3, _tab4, _tab5 = st.tabs(
+    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室"])
 
 # ── Tab 1：戰術指揮大廳 ────────────────────────────────────────────────────
 with _tab1:
@@ -2467,6 +2468,79 @@ with _tab4:
         if st.button("🗑️ 清除對話紀錄", key="copilot_clear"):
             st.session_state.copilot_history = []
             st.rerun()
+
+# ── Tab 5：🦊 PO3 自適應交易員觀測室 ──────────────────────────────────────
+# 解耦視覺化:只「讀」獨立紙上交易員的帳本(po3_paper_state.json / closed.csv),
+# 絕不寫入、也絕不混進 fox_sandbox_state。原本的 score>=20 實驗完全不受影響。
+_PO3_STATE_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "po3_paper_state.json")
+_PO3_CLOSED_CSV  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "po3_paper_closed.csv")
+
+
+def _load_po3_state() -> dict | None:
+    try:
+        with open(_PO3_STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+with _tab5:
+    st.markdown(
+        "#### 🦊 PO3 自適應交易員觀測室 &nbsp;"
+        "<span style='font-size:0.78rem;color:#5B7494;font-weight:400'>"
+        "獨立帳本 · 與沙盒實驗完全解耦 · 唯讀</span>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div style='font-size:0.78rem;color:#5B7494;margin-bottom:0.8rem'>"
+        "零硬編碼自適應引擎(滾動分位數定義盤整/掃針)的全自動紙上交易員。"
+        "由 <code>po3_paper_trader.py</code> 在終端機常駐運行寫入帳本,本分頁只負責視覺化。"
+        "<br>⚠️ 此類 ROP 訊號扣費後負期望已證實,目的是『親眼看 regression』,非賺錢。"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    _po3 = _load_po3_state()
+    if _po3 is None:
+        st.info("🔌 尚未偵測到 PO3 帳本（`po3_paper_state.json`）。"
+                "請先在終端機啟動交易員：`python po3_paper_trader.py`")
+    else:
+        _eq      = float(_po3.get("equity", 0.0))
+        _rpnl    = float(_po3.get("realized_pnl", 0.0))
+        _fees    = float(_po3.get("fees_paid", 0.0))
+        _nclosed = int(_po3.get("closed_count", 0))
+        _open    = _po3.get("open", []) or []
+
+        _c1, _c2, _c3, _c4 = st.columns(4)
+        _c1.metric("帳戶權益", f"${_eq:,.2f}", f"{_eq - 10000:+,.2f}")
+        _c2.metric("累計淨損益", f"{_rpnl:+,.2f}")
+        _c3.metric("已平倉筆數", f"{_nclosed}")
+        _c4.metric("累計手續費", f"-${_fees:,.2f}")
+
+        st.markdown("##### 📌 當前虛擬持倉 (Open)")
+        if _open:
+            _odf = pd.DataFrame(_open)[
+                [c for c in ["symbol", "side", "entry", "sl", "tp", "qty",
+                             "notional", "risk_usd", "opened_at"] if c in _open[0]]]
+            st.dataframe(_odf, width="stretch", hide_index=True)
+        else:
+            st.caption("目前無持倉，等待下一根掃針訊號…")
+
+        st.markdown("##### 📜 歷史績效 (Closed)")
+        try:
+            _cdf = pd.read_csv(_PO3_CLOSED_CSV)
+            if len(_cdf):
+                _wins = int((_cdf["outcome"] == "WIN").sum())
+                _wr = _wins / len(_cdf) * 100
+                _avg_r = _cdf["R"].mean() if "R" in _cdf else float("nan")
+                st.caption(f"勝率 {_wins}/{len(_cdf)} ({_wr:.0f}%) · 平均 {_avg_r:+.2f}R/筆 "
+                           f"· 累計 {_cdf['net_pnl'].sum():+,.2f} USDT（扣費後）")
+                st.dataframe(_cdf.iloc[::-1], width="stretch", hide_index=True)
+            else:
+                st.caption("尚無已平倉紀錄。")
+        except FileNotFoundError:
+            st.caption("尚無已平倉紀錄（`po3_paper_closed.csv` 未生成）。")
+
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────
 st.markdown("---")

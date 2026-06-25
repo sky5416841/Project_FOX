@@ -70,6 +70,41 @@ def calculate_delta_and_cvd(trades: pd.DataFrame) -> dict:
             "delta": float(delta), "cvd_last": float(cvd.iloc[-1]), "cvd": cvd}
 
 
+IMBALANCE_MIN = 0.15   # |Delta| 至少占總量這個比例才算「方向夠強」(否則視為中性、不確認)
+
+
+def delta_breakout_filter(side: str, trades: pd.DataFrame) -> dict:
+    """
+    把 VTuber 的「這筆動能不對」直覺數學化:用 Delta 背離判掃針是真突破還假突破。
+
+      · 上緣掃針→想做空(side='SHORT'):
+          想看到 Delta 強烈『負』(價格被拉上去但實際在倒貨=假突破)→ 確認開空
+          若 Delta 強烈『正』(散戶主力都真買=真突破)→ 放棄(這是 VTuber 閃掉的停損)
+      · 下緣掃針→想做多(side='LONG'):對稱,想看到 Delta 強烈『正』。
+
+    回傳 {passed, delta, ratio, reason}。
+    ⚠ 僅適用 LIVE(逐筆只能抓近期),無法對歷史 K 棒回測 → 這是即時迴圈專用過濾器。
+    """
+    res = calculate_delta_and_cvd(trades)
+    total = res["buy_vol"] + res["sell_vol"]
+    delta = res["delta"]
+    ratio = (delta / total) if total > 0 else 0.0   # 有號失衡比(-1~+1)
+
+    if abs(ratio) < IMBALANCE_MIN:
+        return {"passed": False, "delta": delta, "ratio": ratio,
+                "reason": f"力道中性(|失衡|{abs(ratio):.0%}<{IMBALANCE_MIN:.0%}),不確認"}
+
+    if side == "SHORT":
+        passed = ratio < 0     # 想要賣方主導(背離)
+        reason = "Delta 強烈為負=倒貨背離→確認假突破做空" if passed else \
+                 "Delta 強烈為正=真買盤→真突破,放棄做空(閃停損)"
+    else:  # LONG
+        passed = ratio > 0
+        reason = "Delta 強烈為正=真買盤背離→確認假突破做多" if passed else \
+                 "Delta 強烈為負=真賣壓→真破底,放棄做多"
+    return {"passed": passed, "delta": delta, "ratio": ratio, "reason": reason}
+
+
 def _test():
     symbol = "BTC/USDT"
     print(f"抓取 {symbol} 最近逐筆成交…")

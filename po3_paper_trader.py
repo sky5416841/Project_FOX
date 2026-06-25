@@ -24,6 +24,7 @@ import ccxt
 import pandas as pd
 
 import po3_engine as eng
+import data_pipeline as dp
 
 # === 帳戶與風控設定 ===
 MARKETS      = [("BTC/USDT", "5m"), ("ETH/USDT", "5m")]
@@ -80,6 +81,18 @@ def try_open(state, ex, symbol, tf) -> None:
     df = fetch_live(ex, symbol, tf)
     sig = eng.get_live_signal(df)
     if sig is None:
+        return
+
+    # 第二步:Delta 訂單流過濾器 —— 掃針有了,還要確認「力道背離」才算真操縱
+    try:
+        trades = dp.fetch_trades(symbol, limit=1000, exchange=ex)
+        flt = dp.delta_breakout_filter(sig["signal"], trades)
+        print(f"  · {symbol} 偵測到 {sig['signal']} 掃針 → Delta 過濾:{flt['reason']} "
+              f"(失衡 {flt['ratio']:+.0%})")
+        if not flt["passed"]:
+            return                               # 力道不背離 → 放棄,不開倉
+    except Exception as ex_:
+        print(f"  [WARN] Delta 過濾失敗,保守跳過 {symbol} → {ex_}")
         return
 
     entry, sl, tp = sig["entry_price"], sig["sl"], sig["tp"]

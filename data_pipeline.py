@@ -105,6 +105,53 @@ def delta_breakout_filter(side: str, trades: pd.DataFrame) -> dict:
     return {"passed": passed, "delta": delta, "ratio": ratio, "reason": reason}
 
 
+OBI_DEPTH_PCT = 0.005   # 計算掛單牆的價格深度範圍(中價上下各 0.5%)
+OBI_WALL_MULT = 3.0     # 進場方向的「牆」需是對側的幾倍厚
+
+
+def fetch_order_book(symbol: str = "BTC/USDT", limit: int = 100, exchange=None) -> dict:
+    """抓當下掛單簿(Bids/Asks)。回傳 ccxt 標準 order book dict。"""
+    ex = exchange or make_exchange()
+    return ex.fetch_order_book(symbol, limit=limit)
+
+
+def calculate_obi(order_book: dict, depth_pct: float = OBI_DEPTH_PCT) -> dict:
+    """
+    訂單簿失衡度:統計中價上下 depth_pct 內的買盤/賣盤總量。
+    回傳 {mid, bid_vol(下方買牆), ask_vol(上方賣牆), ratio=ask/bid}。
+    """
+    bids, asks = order_book.get("bids", []), order_book.get("asks", [])
+    if not bids or not asks:
+        return {"mid": 0.0, "bid_vol": 0.0, "ask_vol": 0.0, "ratio": float("nan")}
+    mid = (bids[0][0] + asks[0][0]) / 2
+    lo, hi = mid * (1 - depth_pct), mid * (1 + depth_pct)
+    bid_vol = sum(amt for px, amt in bids if px >= lo)      # 中價下方 0.5% 內的買單
+    ask_vol = sum(amt for px, amt in asks if px <= hi)      # 中價上方 0.5% 內的賣單
+    ratio = (ask_vol / bid_vol) if bid_vol > 0 else float("inf")
+    return {"mid": mid, "bid_vol": float(bid_vol), "ask_vol": float(ask_vol), "ratio": float(ratio)}
+
+
+def obi_filter(side: str, order_book: dict, wall_mult: float = OBI_WALL_MULT) -> dict:
+    """
+    訂單簿失衡牆過濾器:進場前確認主力已在『目標方向』佈好掛單陣地。
+      · 做空(SHORT):上方賣牆 ≥ 下方買牆 × wall_mult → 主力壓著賣單,確認
+      · 做多(LONG) :下方買牆 ≥ 上方賣牆 × wall_mult → 主力托著買單,確認
+    回傳 {passed, ratio, bid_vol, ask_vol, reason}。
+    """
+    o = calculate_obi(order_book)
+    bid_vol, ask_vol, ratio = o["bid_vol"], o["ask_vol"], o["ratio"]
+    if side == "SHORT":
+        passed = ask_vol >= wall_mult * bid_vol
+        reason = (f"上方賣牆 {ask_vol:.1f} ≥ 下方買牆 {bid_vol:.1f}×{wall_mult:.0f}→確認賣壓陣地"
+                  if passed else f"上方賣牆不足({ratio:.1f}×<{wall_mult:.0f}),無掩護,放棄做空")
+    else:  # LONG
+        passed = bid_vol >= wall_mult * ask_vol
+        inv = (bid_vol / ask_vol) if ask_vol > 0 else float("inf")
+        reason = (f"下方買牆 {bid_vol:.1f} ≥ 上方賣牆 {ask_vol:.1f}×{wall_mult:.0f}→確認買盤陣地"
+                  if passed else f"下方買牆不足({inv:.1f}×<{wall_mult:.0f}),無支撐,放棄做多")
+    return {"passed": passed, "ratio": ratio, "bid_vol": bid_vol, "ask_vol": ask_vol, "reason": reason}
+
+
 def _test():
     symbol = "BTC/USDT"
     print(f"抓取 {symbol} 最近逐筆成交…")

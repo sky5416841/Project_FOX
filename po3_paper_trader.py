@@ -95,6 +95,17 @@ def try_open(state, ex, symbol, tf) -> None:
         print(f"  [WARN] Delta 過濾失敗,保守跳過 {symbol} → {ex_}")
         return
 
+    # 第三步:OBI 訂單簿失衡牆 —— 進場前確認主力已在目標方向佈好掛單陣地
+    try:
+        ob = dp.fetch_order_book(symbol, exchange=ex)
+        obi = dp.obi_filter(sig["signal"], ob)
+        print(f"  · {symbol} OBI 牆檢查:{obi['reason']}")
+        if not obi["passed"]:
+            return                               # 沒有掛單牆掩護 → 放棄
+    except Exception as ex_:
+        print(f"  [WARN] OBI 過濾失敗,保守跳過 {symbol} → {ex_}")
+        return
+
     entry, sl, tp = sig["entry_price"], sig["sl"], sig["tp"]
     risk_per_unit = abs(entry - sl)
     if risk_per_unit <= 0:

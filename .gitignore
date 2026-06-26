@@ -54,3 +54,6 @@ ml_lab/live_ml_features.csv
 
 # 研究腳本重跑時掉在 root 的散圖(正式產物在 assets/)
 /*.png
+
+# 動態孵化狀態圖(可重生,不進版控)
+assets/incubation_status.png

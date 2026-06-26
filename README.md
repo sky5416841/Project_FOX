@@ -282,7 +282,7 @@ Project_FOX/
 │   ├── choch_research.py / choch_multimarket.py    # CHoCH 結構
 │   ├── smc_lab.py / rop_backtest.py / smc_strategy_backtest.py  # SMC / ROP
 │   ├── score_backtest.py / score_threshold_sweep.py / exit_research.py / oos_validation.py  # 評分門檻 / 出場 / 樣本外
-│   ├── funding_research.py / funding_conditional.py / funding_regime.py  # 資金費套利
+│   ├── funding_research.py / funding_conditional.py  # 資金費套利研究（funding_regime.py 在 root，雷達用）
 │   └── analyze_entries.py          # 扣費後進場條件複盤
 │
 ├── 文件 ────────────────────────────────────────────────

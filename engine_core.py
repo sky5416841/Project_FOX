@@ -25,7 +25,7 @@ from database import insert_trade
 # ── 路徑與並發鎖 ──────────────────────────────────────────────────────────────
 DATA_DIR = os.getenv("FOX_DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
 _STATE_LOCK = threading.RLock()
-INTERVAL = 15           # 背景引擎每幾秒跑一輪
+INTERVAL = 60           # 背景引擎每幾秒跑一輪（60s：避免 fetch_tickers 全市場掃描爆幣安 weight 限速）
 INITIAL_BALANCE = 10_000.0
 
 # ── 引擎常數（與舊 dashboard 一致）──────────────────────────────────────────

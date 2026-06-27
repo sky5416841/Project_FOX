@@ -1804,7 +1804,7 @@ def frag_chart() -> None:
 
 
 # ── Fragment 4：全網廣域雷達 (20s) ─────────────────────────────────────────
-@st.fragment(run_every=20)
+@st.fragment(run_every=60)
 def frag_scanner() -> None:
     with st.expander("🌐 全網廣域雷達　(Top 30 高波動活躍榜 · 兩段式掃描 · RSI + CCI 14)", expanded=True):
         _sdf, _serr = fetch_scanner_data()

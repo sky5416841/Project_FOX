@@ -18,8 +18,9 @@ SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
 TF, WINDOW = "1h", 168          # 近 7 天的小時報酬
 
 
-def main():
-    ex = ccxt.binance({"options": {"defaultType": "future"}, "enableRateLimit": True})
+def scan_correlation(ex=None):
+    """回傳 (names, C, avg, eff)，供 CLI 與網頁共用（不印字）。"""
+    ex = ex or ccxt.binance({"options": {"defaultType": "future"}, "enableRateLimit": True})
     rets = {}
     for s in SYMBOLS:
         try:
@@ -32,7 +33,15 @@ def main():
     m = min(len(v) for v in rets.values())
     R = np.array([rets[n][-m:] for n in names])
     C = np.corrcoef(R)
+    iu = np.triu_indices(len(names), 1)
+    avg = float(C[iu].mean())
+    N = len(names)
+    eff = N / (1 + (N - 1) * avg)
+    return names, C, round(avg, 2), round(eff, 1)
 
+
+def main():
+    names, C, avg, eff = scan_correlation()
     print(f"主流幣報酬相關矩陣（{TF}，近 {WINDOW//24} 天）")
     print("=" * (8 + 6 * len(names)))
     print("        " + "".join(f"{n[:5]:>6}" for n in names))
@@ -41,11 +50,7 @@ def main():
         print(f"  {n[:6]:<6}{row}")
     print("-" * (8 + 6 * len(names)))
 
-    iu = np.triu_indices(len(names), 1)
-    avg = C[iu].mean()
-    # 有效獨立注數（粗估）：N / (1 + (N-1)×平均相關)
     N = len(names)
-    eff = N / (1 + (N - 1) * avg)
     print(f"  平均兩兩相關係數 : {avg:.2f}")
     print(f"  你開了 {N} 個倉，但『有效獨立注數』≈ {eff:.1f}")
     print("=" * (8 + 6 * len(names)))

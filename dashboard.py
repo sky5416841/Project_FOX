@@ -2248,8 +2248,8 @@ def frag_funding_radar() -> None:
 # 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
 # 無論使用者停在哪個 Tab，session_state 寫入與資料更新均持續進行。
 # ═════════════════════════════════════════════════════════════════════════════
-_tab1, _tab2, _tab3, _tab4, _tab5 = st.tabs(
-    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室"])
+_tab1, _tab2, _tab3, _tab4, _tab5, _tab6 = st.tabs(
+    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室", "🩺 市場體檢"])
 
 # ── Tab 1：戰術指揮大廳 ────────────────────────────────────────────────────
 with _tab1:
@@ -2593,6 +2593,67 @@ with _tab5:
                 else:
                     st.button("📄 無掃針訊號可匯出", disabled=True,
                               width="stretch", key="po3_dl_csv_disabled")
+
+
+# ── Tab 6：🩺 市場體檢（趨勢/震盪 + 相關性，手動觸發）────────────────────
+with _tab6:
+    st.markdown(
+        "#### 🩺 市場體檢 &nbsp;"
+        "<span style='font-size:0.78rem;color:#5B7494;font-weight:400'>"
+        "下單前先看環境 · 唯讀 · 手動觸發</span>",
+        unsafe_allow_html=True,
+    )
+    st.caption("把命令列的『市場狀態偵測』與『相關性陷阱』搬上網頁。按下後抓即時資料，"
+               "判斷現在是趨勢還是震盪、你的幣是不是高相關（假分散）。對應 `regime_detector.py` / `correlation_check.py`。")
+    if st.button("🩺 執行市場體檢", key="health_btn"):
+        with st.spinner("抓取市場資料分析中…"):
+            try:
+                import regime_detector as _rg
+                import correlation_check as _cc
+                _ex = engine_core.make_exchange()
+                _rrows, _rsum = _rg.scan_regime(_ex)
+                _cnames, _C, _cavg, _ceff = _cc.scan_correlation(_ex)
+                st.session_state.market_health = {
+                    "regime_rows": _rrows, "regime_sum": _rsum,
+                    "corr_names": _cnames, "corr_mat": _C.tolist(),
+                    "corr_avg": _cavg, "corr_eff": _ceff,
+                }
+            except Exception as _e:
+                st.session_state.market_health = {"error": str(_e)}
+
+    _mh = st.session_state.get("market_health")
+    if _mh and "error" in _mh:
+        st.error(f"體檢失敗：{_mh['error']}")
+    elif _mh:
+        # ── 市場狀態 ──
+        st.markdown("##### 📈 市場狀態（趨勢 vs 震盪）")
+        _s = _mh["regime_sum"]
+        if _s:
+            st.metric("全市場平均效率比率", f"{_s['avg']}",
+                      f"趨勢幣 {_s['n_trend']}/{_s['n']}")
+            st.info(_s["verdict"])
+        st.dataframe(pd.DataFrame(_mh["regime_rows"]), width="stretch", hide_index=True)
+
+        st.divider()
+        # ── 相關性 ──
+        st.markdown("##### 🔗 相關性陷阱（你以為分散？）")
+        _c1, _c2 = st.columns(2)
+        _c1.metric("平均兩兩相關係數", f"{_mh['corr_avg']}")
+        _c2.metric("有效獨立注數", f"{_mh['corr_eff']}",
+                   f"開了 {len(_mh['corr_names'])} 個倉")
+        if _mh["corr_avg"] > 0.7:
+            st.warning(f"🔴 高度同向：開 {len(_mh['corr_names'])} 個幣 ≈ 下同一注 "
+                       f"{len(_mh['corr_names'])/_mh['corr_eff']:.1f} 倍。BTC 一倒全倒。")
+        elif _mh["corr_avg"] > 0.4:
+            st.info("🟡 中度相關：有點分散，但別自以為很安全。")
+        else:
+            st.success("🟢 相對分散：彼此較獨立。")
+        _cdf = pd.DataFrame(_mh["corr_mat"], index=_mh["corr_names"], columns=_mh["corr_names"])
+        st.dataframe(_cdf.style.format("{:.2f}").background_gradient(cmap="Reds", vmin=0, vmax=1),
+                     width="stretch")
+        st.caption("⚠ 啟發式指標、非投資建議。相關性會隨行情變（恐慌時全衝向 1）。")
+    else:
+        st.info("點上方按鈕跑一次市場體檢。建議下單前看一眼：現在適不適合做趨勢、你的倉真分散嗎。")
 
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────

@@ -26,13 +26,11 @@ def efficiency_ratio(closes):
     return net / path if path > 0 else 0.0
 
 
-def main():
-    ex = ccxt.binance({"options": {"defaultType": "future"}, "enableRateLimit": True})
-    print(f"市場狀態偵測（{TF}，近 {WINDOW} 根 ≈ {WINDOW*4//24} 天）")
-    print("=" * 56)
-    print(f"  {'幣種':<12}{'效率比率':>10}{'淨變動':>10}   狀態")
-    print("-" * 56)
-    ers = []
+def scan_regime(ex=None):
+    """回傳 (rows, summary)，供 CLI 與網頁共用（不印字）。
+    rows: [{symbol, er, chg, state}]; summary: {avg, n_trend, n, verdict}。"""
+    ex = ex or ccxt.binance({"options": {"defaultType": "future"}, "enableRateLimit": True})
+    rows, ers = [], []
     for s in MAJORS:
         try:
             o = ex.fetch_ohlcv(s, TF, limit=WINDOW + 1)
@@ -44,24 +42,33 @@ def main():
         er = efficiency_ratio(closes)
         chg = (closes[-1] / closes[0] - 1) * 100
         ers.append(er)
-        if er >= TREND_ER:   tag = "📈 趨勢（適合讓利潤跑）"
-        elif er <= CHOP_ER:  tag = "🌀 震盪（趨勢策略會被磨）"
-        else:                tag = "➖ 中性／轉換中"
-        arrow = "↑" if chg >= 0 else "↓"
-        print(f"  {s.split('/')[0]:<12}{er:>10.2f}{chg:>9.1f}%{arrow}   {tag}")
-
-    print("-" * 56)
+        state = "📈 趨勢" if er >= TREND_ER else ("🌀 震盪" if er <= CHOP_ER else "➖ 中性")
+        rows.append({"symbol": s.split("/")[0], "er": round(er, 2),
+                     "chg_pct": round(chg, 1), "state": state})
+    summary = {}
     if ers:
-        avg = np.mean(ers)
+        avg = float(np.mean(ers))
         n_trend = sum(1 for e in ers if e >= TREND_ER)
-        if avg >= TREND_ER:
-            v = "🟢 整體趨勢盤 → 趨勢/大贏小賠策略的好環境"
-        elif avg <= CHOP_ER:
-            v = "🔴 整體震盪盤 → 趨勢策略會流血，建議空手或改區間打法"
-        else:
-            v = "🟡 混沌 → 只挑個別 📈 的幣，整體別 all in 趨勢"
-        print(f"  全市場平均 ER {avg:.2f}　趨勢幣 {n_trend}/{len(ers)}")
-        print(f"  總判定：{v}")
+        if avg >= TREND_ER:   v = "🟢 整體趨勢盤 → 趨勢/大贏小賠策略的好環境"
+        elif avg <= CHOP_ER:  v = "🔴 整體震盪盤 → 趨勢策略會流血，建議空手或改區間打法"
+        else:                 v = "🟡 混沌 → 只挑個別趨勢幣，整體別 all in 趨勢"
+        summary = {"avg": round(avg, 2), "n_trend": n_trend, "n": len(ers), "verdict": v}
+    return rows, summary
+
+
+def main():
+    print(f"市場狀態偵測（{TF}，近 {WINDOW} 根 ≈ {WINDOW*4//24} 天）")
+    print("=" * 56)
+    print(f"  {'幣種':<12}{'效率比率':>10}{'淨變動':>10}   狀態")
+    print("-" * 56)
+    rows, summary = scan_regime()
+    for r in rows:
+        arrow = "↑" if r["chg_pct"] >= 0 else "↓"
+        print(f"  {r['symbol']:<12}{r['er']:>10.2f}{r['chg_pct']:>9.1f}%{arrow}   {r['state']}")
+    print("-" * 56)
+    if summary:
+        print(f"  全市場平均 ER {summary['avg']}　趨勢幣 {summary['n_trend']}/{summary['n']}")
+        print(f"  總判定：{summary['verdict']}")
     print("=" * 56)
     print("  用法：要用『移動停利/讓利潤奔跑』前，先看這裡是不是趨勢環境。")
     print("  震盪盤硬做趨勢 = 被假突破磨死（exit_style_lab 已示範）。")

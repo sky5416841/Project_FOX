@@ -265,7 +265,8 @@ def _user_state_path(user_id: int) -> str:
 
 
 _SETTINGS_KEYS = ("auto_trade_enabled", "trend_filter_enabled", "allow_short",
-                  "sniper_leverage", "sniper_margin", "sniper_max_pos", "sniper_loss_cooldown")
+                  "sniper_leverage", "sniper_margin", "sniper_max_pos", "sniper_loss_cooldown",
+                  "selected_symbol", "price_floor", "drop_pct", "sound_alert")
 
 
 def save_state() -> None:
@@ -327,6 +328,9 @@ defaults = {
     "sniper_margin":       1_000.0,
     "sniper_max_pos":      5,
     "sniper_loss_cooldown": 120,
+    "drop_pct":            0.5,        # 急跌警報%（持久化，不再每次 F5 重置）
+    "sound_alert":         True,       # 警報音效開關（側欄可關）
+    "_alert_primed":       False,      # 首次載入不發聲 → F5 不會被嗶
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -1301,6 +1305,8 @@ if not st.session_state._sandbox_loaded:
     for _k in _SETTINGS_KEYS:
         if _k in _saved_settings and _saved_settings[_k] is not None:
             st.session_state[_k] = _saved_settings[_k]
+    # 讓幣種切換偵測的基準對齊還原後的幣種 → F5 不會被誤判為「換幣」而重置警報線
+    st.session_state["_price_sym"] = st.session_state.selected_symbol
     # 2) 還原沙盒狀態
     _saved = engine_core.load_state(_uid0)
     if _saved:
@@ -1371,12 +1377,18 @@ with st.sidebar:
     st.divider()
 
     _fcfg = _FLOOR_CFG.get(st.session_state.selected_symbol, _FLOOR_CFG["BTC/USDT"])
+    # 不寫死 value → 讀 session_state（持久化）；只在缺值/超出該幣種範圍時才回預設
+    _pf_cur = st.session_state.get("price_floor")
+    if _pf_cur is None or not (_fcfg["min"] <= _pf_cur <= _fcfg["max"]):
+        st.session_state["price_floor"] = _fcfg["value"]
     st.slider("🔻 跌破警報線 (USDT)",
-              min_value=_fcfg["min"], max_value=_fcfg["max"], value=_fcfg["value"],
+              min_value=_fcfg["min"], max_value=_fcfg["max"],
               step=_fcfg["step"], format=_fcfg["fmt"], key="price_floor")
     st.slider("⚡ 急跌警報 % (1 分鐘)",
-              min_value=0.1, max_value=5.0, value=0.5,
+              min_value=0.1, max_value=5.0,
               step=0.1, format="%.1f%%", key="drop_pct")
+    st.toggle("🔔 警報音效", key="sound_alert",
+              help="關閉後不再發出嗶聲（F5 重新整理也不會被吵）。")
 
     st.divider()
     st.markdown("### 🎛️ 虛擬沙盒戰術控制台")
@@ -1452,7 +1464,9 @@ if st.session_state.get("_price_sym") != st.session_state.selected_symbol:
     st.session_state.alert_active  = False
     st.session_state.alert_msg     = ""
     st.session_state.alerted       = set()
-    st.session_state.pop("price_floor", None)   # 刪除舊 key → slider 以新幣種預設值渲染
+    # 真的換幣時，把警報線設成新幣種的預設值（slider 讀 session_state，不再寫死 value）
+    st.session_state["price_floor"] = _FLOOR_CFG.get(
+        st.session_state.selected_symbol, _FLOOR_CFG["BTC/USDT"])["value"]
     st.session_state["_price_sym"] = st.session_state.selected_symbol
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1544,7 +1558,9 @@ def frag_ticker() -> None:
             if "floor" not in st.session_state.alerted:
                 st.session_state.alert_active = True
                 st.session_state.alert_msg    = f"價格跌破 {_pf:g} USDT！現價：{_price:g}"
-                st.session_state.alerted.add("floor"); beep()
+                st.session_state.alerted.add("floor")
+                if st.session_state.get("sound_alert", True) and st.session_state.get("_alert_primed"):
+                    beep()          # 首次載入(未 primed)或關靜音 → 不發聲
         else:
             st.session_state.alerted.discard("floor")
         _win = [e for e in _h if e["ts"] >= _nt - HISTORY_WINDOW_SEC]
@@ -1557,7 +1573,10 @@ def frag_ticker() -> None:
                     if _k not in st.session_state.alerted:
                         st.session_state.alert_active = True
                         st.session_state.alert_msg    = f"1 分鐘急跌 {_dp:.2f}%！{_op:g} → {_price:g}"
-                        st.session_state.alerted.add(_k); beep()
+                        st.session_state.alerted.add(_k)
+                        if st.session_state.get("sound_alert", True) and st.session_state.get("_alert_primed"):
+                            beep()
+        st.session_state._alert_primed = True    # 第一輪評估完才開放發聲 → F5 當下不嗶
 
     if st.session_state.alert_active:
         st.markdown(f'<div class="alert-banner">🚨 F.O.X. 警報：市場異動！ — '

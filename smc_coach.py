@@ -191,8 +191,8 @@ def seven_steps(df, bias, events, gaps):
     ]
 
 
-def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF):
-    """跑完整 SMC 教練分析，回傳 (fig, summary)。供網頁 st.pyplot 與 CLI 共用。"""
+def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF, draw=True):
+    """跑完整 SMC 教練分析，回傳 (fig, panel)。draw=False 時不畫圖(fig=None，供交易器省資源)。"""
     ex = ex or make_ex()
     global SYMBOL, MAIN_TF
     SYMBOL, MAIN_TF = symbol, main_tf
@@ -242,7 +242,7 @@ def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF):
         "htf": htf, "sl_tp": f"{sl:,.1f} 上方 ／ 目標 {tp:,.1f}" if bias == "空" else f"{sl:,.1f} 下方 ／ 目標 {tp:,.1f}",
         "chan_txt": (chan_dir + broke) if chan_on else f"震盪盤·通道休眠 (ER {er:.2f})",
     }
-    fig = render(df, events, gaps, obs, extra)
+    fig = render(df, events, gaps, obs, extra) if draw else None
     panel = {
         "rows": [
             ("SMC 教練", f"自動：{bias}單｜同向{bias}方推進", "#1b5e20"),
@@ -256,7 +256,11 @@ def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF):
         ],
         "steps": steps,
         "summary": {"dirs": dirs, "bias": bias, "n_struct": len(events),
-                    "n_fvg": len(gaps), "n_ob": len(obs), "chan": extra["chan_txt"]},
+                    "n_fvg": len(gaps), "n_ob": len(obs), "chan": extra["chan_txt"],
+                    # 數值版進場資訊(供自動交易器用)
+                    "price": float(df["close"].iat[-1]), "sl": float(sl), "tp": float(tp),
+                    "all_pass": all(ok for _, _, ok in steps), "n_pass": done,
+                    "er": float(er), "n_align": list(dirs.values()).count(bias)},
     }
     return fig, panel
 

@@ -2685,55 +2685,74 @@ with _tab7:
     )
     st.caption("把命令列的 `smc_coach.py` 搬上網頁：多時框方向 + BOS/CHoCH 結構 + 訂單區/FVG缺口 "
                "+ 下降通道 + 7 步驟進場流程。⚠️ SMC 無 edge，看盤輔助/盤感教練用，非賺錢訊號。")
+    _SMC_SYMS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+                 "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT"]
+
+    def _smc_panel_html(p):
+        h = "<div style='font-family:sans-serif'>"
+        for label, val, bg in p["rows"]:
+            h += (f"<div style='display:flex;margin-bottom:3px;border-radius:3px;overflow:hidden'>"
+                  f"<div style='background:#37474f;color:#cfd8dc;padding:4px 8px;min-width:88px;font-size:0.78rem'>{label}</div>"
+                  f"<div style='background:{bg};color:#fff;padding:4px 8px;flex:1;font-size:0.78rem'>{val}</div></div>")
+        h += "<div style='height:8px'></div>"
+        for name, status, ok in p["steps"]:
+            c = "#26a69a" if ok else "#78909c"
+            h += (f"<div style='display:flex;margin-bottom:2px;background:#1a1f28;border-radius:3px'>"
+                  f"<div style='color:#b0bec5;padding:3px 8px;min-width:88px;font-size:0.76rem'>步驟 {name}</div>"
+                  f"<div style='color:{c};padding:3px 8px;flex:1;font-size:0.76rem'>{'●' if ok else '○'} {status}</div></div>")
+        return h + "</div>"
+
     _sc1, _sc2 = st.columns([1, 1])
     with _sc1:
-        _smc_sym = st.selectbox("市場", ["BTC/USDT", "ETH/USDT", "SOL/USDT"], key="smc_sym")
+        _smc_sym = st.selectbox("市場", _SMC_SYMS, key="smc_sym")
     with _sc2:
         _smc_tf = st.selectbox("主時框", ["15m", "5m", "1h"], key="smc_tf")
+    _smc_multi = st.checkbox("🔭 三時框一次看 (4h / 1h / 15m)　— 高週期看方向、低週期找進場", key="smc_multi")
+
     if st.button("🎯 跑 SMC 教練分析", key="smc_btn"):
         with st.spinner(f"抓 {_smc_sym} 多時框並分析中…"):
             try:
                 import importlib, smc_coach as _smc
-                importlib.reload(_smc)          # 每次點都載最新程式(改 smc_coach.py 不必重啟伺服器)
-                _ex = engine_core.make_exchange()
-                _fig, _panel = _smc.build_coach(_ex, symbol=_smc_sym, main_tf=_smc_tf)
+                importlib.reload(_smc)
                 from io import BytesIO
-                _buf = BytesIO()
-                _fig.savefig(_buf, format="png", dpi=150, facecolor="#0d0f14", bbox_inches="tight")
-                import matplotlib.pyplot as _plt; _plt.close(_fig)
-                st.session_state.smc_coach = {"png": _buf.getvalue(), "panel": _panel,
-                                              "fname": f"{_smc_sym.replace('/', '_')}_{_smc_tf}_SMC_Coach"}
+                import matplotlib.pyplot as _plt
+                _ex = engine_core.make_exchange()
+
+                def _shot(tf):
+                    _f, _pn = _smc.build_coach(_ex, symbol=_smc_sym, main_tf=tf)
+                    _b = BytesIO(); _f.savefig(_b, format="png", dpi=150, facecolor="#0d0f14", bbox_inches="tight")
+                    _plt.close(_f)
+                    return {"tf": tf, "png": _b.getvalue(), "panel": _pn}
+
+                _fn = f"{_smc_sym.replace('/', '_')}_SMC"
+                if _smc_multi:
+                    st.session_state.smc_coach = {"multi": [_shot(t) for t in ("4h", "1h", "15m")], "fname": _fn}
+                else:
+                    st.session_state.smc_coach = {"single": _shot(_smc_tf), "fname": _fn}
             except Exception as _e:
                 st.session_state.smc_coach = {"error": str(_e)}
 
     _sc = st.session_state.get("smc_coach")
     if _sc and "error" in _sc:
         st.error(f"SMC 分析失敗：{_sc['error']}")
-    elif _sc:
-        _p = _sc["panel"]
-        _chart_col, _panel_col = st.columns([3, 2])
-        with _chart_col:
-            st.image(_sc["png"], width="stretch")
-            st.download_button("🖼️ 下載 K 線圖", data=_sc["png"],
-                               file_name=f"{_sc['fname']}.png", mime="image/png", key="smc_dl")
-        with _panel_col:
-            # 狀態列（網頁原生 HTML，字清晰不模糊）
-            _html = "<div style='font-family:sans-serif'>"
-            for _label, _val, _bg in _p["rows"]:
-                _html += (f"<div style='display:flex;margin-bottom:3px;border-radius:3px;overflow:hidden'>"
-                          f"<div style='background:#37474f;color:#cfd8dc;padding:4px 8px;min-width:88px;font-size:0.78rem'>{_label}</div>"
-                          f"<div style='background:{_bg};color:#fff;padding:4px 8px;flex:1;font-size:0.78rem'>{_val}</div></div>")
-            _html += "<div style='height:8px'></div>"
-            for _name, _status, _ok in _p["steps"]:
-                _c = "#26a69a" if _ok else "#78909c"
-                _mk = "●" if _ok else "○"
-                _html += (f"<div style='display:flex;margin-bottom:2px;background:#1a1f28;border-radius:3px'>"
-                          f"<div style='color:#b0bec5;padding:3px 8px;min-width:88px;font-size:0.76rem'>步驟 {_name}</div>"
-                          f"<div style='color:{_c};padding:3px 8px;flex:1;font-size:0.76rem'>{_mk} {_status}</div></div>")
-            _html += "</div>"
-            st.markdown(_html, unsafe_allow_html=True)
+    elif _sc and "multi" in _sc:
+        for _ch in _sc["multi"]:
+            st.markdown(f"##### ⏱️ {_ch['tf']}　·　偏 {_ch['panel']['summary']['bias']} 方")
+            st.image(_ch["png"], width="stretch")
+        st.divider()
+        st.markdown("##### 📋 教練面板（以最低時框 15m 進場流程為準）")
+        st.markdown(_smc_panel_html(_sc["multi"][-1]["panel"]), unsafe_allow_html=True)
+    elif _sc and "single" in _sc:
+        _ch = _sc["single"]
+        _cc, _pc = st.columns([3, 2])
+        with _cc:
+            st.image(_ch["png"], width="stretch")
+            st.download_button("🖼️ 下載 K 線圖", data=_ch["png"],
+                               file_name=f"{_sc['fname']}_{_ch['tf']}.png", mime="image/png", key="smc_dl")
+        with _pc:
+            st.markdown(_smc_panel_html(_ch["panel"]), unsafe_allow_html=True)
     else:
-        st.info("選市場/時框後按「跑 SMC 教練分析」，產生多時框結構面板。")
+        st.info("選市場/時框後按「跑 SMC 教練分析」。勾「三時框一次看」可一次出 4h/1h/15m 三張圖。")
 
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────

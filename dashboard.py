@@ -2693,7 +2693,8 @@ with _tab7:
     if st.button("🎯 跑 SMC 教練分析", key="smc_btn"):
         with st.spinner(f"抓 {_smc_sym} 多時框並分析中…"):
             try:
-                import smc_coach as _smc
+                import importlib, smc_coach as _smc
+                importlib.reload(_smc)          # 每次點都載最新程式(改 smc_coach.py 不必重啟伺服器)
                 _ex = engine_core.make_exchange()
                 _fig, _sm = _smc.build_coach(_ex, symbol=_smc_sym, main_tf=_smc_tf)
                 from io import BytesIO

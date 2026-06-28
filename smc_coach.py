@@ -1,13 +1,13 @@
 """
-smc_coach.py — SMC 教練面板 v1
+smc_coach.py — SMC 教練面板 v2
 
-把多時框方向 + 結構(BOS/CHoCH)+ 訂單區/FVG 缺口 + 7 步驟進場流程，
-畫成一張「教練面板」圖（左：標註的 K 線圖；右：狀態表）。輸出 assets/smc_coach.png。
+多時框方向 + 結構(BOS/CHoCH) + 訂單區/FVG缺口 + 下降通道 + 7步驟進場流程 + 停損目標，
+畫成一張「教練面板」圖(左：標註K線；右：狀態表)。輸出 assets/smc_coach.png。
 
-★ 誠實聲明：SMC 已驗證扣費後無 edge(t=-12.27)。這是「視覺化盤感教練/看盤輔助」
-  與作品展示用，不是賺錢訊號。判定為啟發式，數字僅供相對參考。
+★ 誠實聲明：SMC 已驗證扣費後無 edge(t=-12.27)。此為「看盤輔助/盤感教練/作品展示」，
+  不是賺錢訊號。所有判定為啟發式，數字僅供相對參考。
 
-用法：python smc_coach.py   （可改最上面 SYMBOL / MAIN_TF）
+用法：python smc_coach.py
 """
 import ccxt
 import numpy as np
@@ -21,9 +21,10 @@ plt.rcParams["axes.unicode_minus"] = False
 
 SYMBOL  = "BTC/USDT"
 MAIN_TF = "15m"
-TFS_DIR = ["1d", "4h", "1h", "15m"]   # 多時框方向（高→低）
+TFS_DIR = ["1d", "4h", "1h", "15m"]
 BARS    = 180
-SWING_K = 2                            # 擺動點：左右各 K 根比較
+SWING_K = 2
+CHAN_LB = 110          # 通道回歸取最近幾根
 
 
 def make_ex():
@@ -35,12 +36,10 @@ def fetch(ex, tf, n):
     return pd.DataFrame(o, columns=["ts", "open", "high", "low", "close", "vol"])
 
 
-def ema(s, n):
-    return s.ewm(span=n, adjust=False).mean()
+def ema(s, n): return s.ewm(span=n, adjust=False).mean()
 
 
 def tf_direction(df):
-    """單一時框方向：收盤 vs EMA50 + EMA 斜率。回傳 '多'/'空'/'盤'。"""
     e = ema(df["close"], 50)
     up = df["close"].iat[-1] > e.iat[-1]
     slope = e.iat[-1] - e.iat[-6]
@@ -50,7 +49,6 @@ def tf_direction(df):
 
 
 def swings(df, k=SWING_K):
-    """碎形擺動高/低點。回傳 (highs_idx, lows_idx)。"""
     h, l = df["high"].values, df["low"].values
     hi, lo = [], []
     for i in range(k, len(df) - k):
@@ -60,78 +58,89 @@ def swings(df, k=SWING_K):
 
 
 def structure(df):
-    """從擺動點推 BOS / CHoCH 標記。回傳 [(idx, 'BOS'/'CHoCH', '↑'/'↓')]。"""
     hi, lo = swings(df)
-    events, trend = [], None
-    pts = sorted([(i, "H") for i in hi] + [(i, "L") for i in lo])
-    last_h = last_l = None
-    for i, t in pts:
+    events, trend, last_h, last_l = [], None, None, None
+    for i, t in sorted([(i, "H") for i in hi] + [(i, "L") for i in lo]):
         if t == "H":
             if last_h is not None and df["high"].iat[i] > df["high"].iat[last_h]:
-                ev = "BOS" if trend == "up" else "CHoCH"
-                events.append((i, ev, "↑")); trend = "up"
+                events.append((i, "BOS" if trend == "up" else "CHoCH", "↑")); trend = "up"
             last_h = i
         else:
             if last_l is not None and df["low"].iat[i] < df["low"].iat[last_l]:
-                ev = "BOS" if trend == "down" else "CHoCH"
-                events.append((i, ev, "↓")); trend = "down"
+                events.append((i, "BOS" if trend == "down" else "CHoCH", "↓")); trend = "down"
             last_l = i
-    return events, trend
+    return events
 
 
 def fvg(df):
-    """3 根 K 棒的失衡缺口。回傳 [(i, low, high, 'bear'/'bull')]（取最近幾個）。"""
     out = []
     for i in range(2, len(df)):
         h0, l0 = df["high"].iat[i - 2], df["low"].iat[i - 2]
         h2, l2 = df["high"].iat[i], df["low"].iat[i]
-        if l2 > h0:   out.append((i, h0, l2, "bull"))   # 上方留口（多方缺口）
-        elif h2 < l0: out.append((i, h2, l0, "bear"))   # 下方留口（空方缺口）
-    return out[-4:]
+        if l2 > h0:   out.append((i, h0, l2, "bull"))
+        elif h2 < l0: out.append((i, h2, l0, "bear"))
+    return out[-3:]
 
 
-def seven_steps(df, bias, events):
-    """評估 7 步驟進場流程的進度（啟發式）。回傳 [(名稱, 狀態字, 通過?)]。"""
-    last = df.iloc[-1]
-    recent_ev = [e for e in events if e[0] >= len(df) - 40]
-    has_choch = any(e[1] == "CHoCH" and ((e[2] == "↓") == (bias == "空")) for e in recent_ev)
-    has_bos = any(e[1] == "BOS" and ((e[2] == "↓") == (bias == "空")) for e in recent_ev)
-    swept = (df["high"].iloc[-20:].max() == df["high"].iloc[-20:-1].max()) if bias == "空" else \
-            (df["low"].iloc[-20:].min() == df["low"].iloc[-20:-1].min())
-    in_zone = any(g[3] == ("bear" if bias == "空" else "bull") for g in fvg(df))
-    react = (last["close"] < last["open"]) if bias == "空" else (last["close"] > last["open"])
-    steps = [
-        ("1 方向", f"多時框{bias}向推進", True),
-        ("2 區域", "進入訂單區/FVG" if in_zone else "等待進入區域", in_zone),
-        ("3 掃蕩", "掃過前高/前低" if swept else "尚未掃蕩", bool(swept)),
-        ("4 轉向", "MSS/CHoCH 完成" if has_choch else "等待轉向", has_choch),
-        ("5 延續", "BOS 完成" if has_bos else "等待延續", has_bos),
-        ("6 回測", "回測新區" if in_zone and has_bos else "等待回測", in_zone and has_bos),
-        ("7 反應K", "反應 K 完成" if react and has_bos else "等待反應 K", react and has_bos),
-    ]
-    return steps
+def order_blocks(df, events, bias):
+    """訂單區：結構破壞前最後一根反向 K 棒。回傳 [(i, lo, hi, label)]。"""
+    obs = []
+    want = "↓" if bias == "空" else "↑"
+    for i, ev, d in [e for e in events if e[2] == want][-2:]:
+        # 破壞前 10 根內，找最後一根反向(空方找紅前的綠、多方找綠前的紅)收斂 K
+        rng = range(max(0, i - 10), i)
+        cand = [j for j in rng if (df["close"].iat[j] >= df["open"].iat[j]) == (bias == "空")]
+        if not cand:
+            continue
+        j = cand[-1]
+        lo, hi = min(df["open"].iat[j], df["close"].iat[j]), max(df["open"].iat[j], df["close"].iat[j])
+        obs.append((j, df["low"].iat[j] if bias == "空" else lo,
+                    df["high"].iat[j] if bias == "空" else hi,
+                    "空方訂單區" if bias == "空" else "多方訂單區"))
+    return obs
 
 
-def render(df, dirs, events, gaps, steps, bias):
+def channel(df, lb=CHAN_LB):
+    seg = df.iloc[-lb:]
+    x = np.arange(len(seg))
+    m, b = np.polyfit(x, seg["close"].values, 1)
+    mid = m * x + b
+    up = (seg["high"].values - mid).max()
+    dn = (seg["low"].values - mid).min()
+    xs = np.arange(len(df) - lb, len(df))
+    return xs, mid + up, mid + dn, m
+
+
+def render(df, dirs, events, gaps, obs, steps, bias, extra):
     fig = plt.figure(figsize=(16, 9), facecolor="#0d0f14")
     gs = fig.add_gridspec(1, 20)
     ax = fig.add_subplot(gs[0, :13]); axp = fig.add_subplot(gs[0, 13:])
     for a in (ax, axp): a.set_facecolor("#0d0f14")
 
-    # K 線
     for i, r in df.iterrows():
         c = "#26a69a" if r["close"] >= r["open"] else "#ef5350"
         ax.plot([i, i], [r["low"], r["high"]], color=c, lw=0.6)
         ax.plot([i, i], [r["open"], r["close"]], color=c, lw=2.2)
     ax.plot(df.index, ema(df["close"], 50), color="#ffd54f", lw=1.2)
 
-    # FVG 缺口 + 訂單區
-    for i, lo, hi, kind in gaps:
+    # 下降通道
+    xs, up_line, dn_line, slope = extra["chan"]
+    ax.plot(xs, up_line, color="#26c6da", lw=1.1, alpha=0.8)
+    ax.plot(xs, dn_line, color="#26c6da", lw=1.1, alpha=0.8)
+
+    # 訂單區(延伸到右)
+    for j, lo, hi, label in obs:
+        ax.add_patch(Rectangle((j, lo), len(df) - j, hi - lo,
+                               facecolor="#6d4c41", alpha=0.30, edgecolor="#a1887f", lw=1.0))
+        ax.text((j + len(df)) / 2, hi, label, color="#d7ccc8", fontsize=9, va="bottom", ha="center")
+
+    # FVG 缺口(標籤放左緣、錯開避免重疊)
+    for k, (i, lo, hi, kind) in enumerate(gaps):
         col = "#7e57c2" if kind == "bear" else "#5c6bc0"
         ax.add_patch(Rectangle((i - 2, lo), len(df) - i + 2, hi - lo,
-                               facecolor=col, alpha=0.18, edgecolor=col, lw=0.8))
-        ax.text(len(df) - 1, (lo + hi) / 2, "空方缺口" if kind == "bear" else "多方缺口",
-                color=col, fontsize=8, va="center", ha="right")
+                               facecolor=col, alpha=0.16, edgecolor=col, lw=0.7))
+        ax.text(i - 2, hi, "空方缺口" if kind == "bear" else "多方缺口",
+                color=col, fontsize=7.5, va="bottom", ha="left")
 
     # 結構標記
     for i, ev, d in events[-12:]:
@@ -144,33 +153,35 @@ def render(df, dirs, events, gaps, steps, bias):
     ax.tick_params(colors="#5B7494"); ax.grid(alpha=0.08)
     for s in ax.spines.values(): s.set_color("#2a2f3a")
 
-    # ── 右側狀態面板 ──
+    # ── 右側面板 ──
     axp.axis("off")
-    rows = [("SMC 教練", f"自動：{bias}單｜同向{bias}方推進", "#1b5e20")]
-    rows.append(("方向", " ｜ ".join(f"{tf.upper()} {d}" for tf, d in dirs.items()), "#263238"))
-    last = df["close"].iat[-1]
-    rows.append(("現價", f"{last:,.1f}", "#263238"))
-    rows.append(("整體偏向", f"{bias}方（看高週期方向）", "#4e342e"))
-    rows.append(("持倉", "無持倉｜方向觀察", "#263238"))
-    rows.append(("程式正在等待", f"{bias}方轉向確認流程", "#1b5e20"))
-    y = 0.97
+    rows = [
+        ("SMC 教練", f"自動：{bias}單｜同向{bias}方推進", "#1b5e20"),
+        ("方向", " ｜ ".join(f"{tf.upper()} {d}" for tf, d in dirs.items()), "#263238"),
+        ("進場進度", extra["progress"], "#1b5e20" if extra["ready"] else "#263238"),
+        ("高週期區域", extra["htf"], "#4e342e"),
+        ("停損／目標", extra["sl_tp"], "#263238"),
+        ("1H 通道", extra["chan_txt"], "#5d4037"),
+        ("持倉", "無持倉｜方向觀察", "#263238"),
+        ("程式正在等待", f"{bias}方轉向確認流程", "#1b5e20"),
+    ]
+    y = 0.985
     for label, val, bg in rows:
-        axp.add_patch(Rectangle((0.0, y - 0.052), 0.32, 0.05, transform=axp.transAxes,
+        axp.add_patch(Rectangle((0.0, y - 0.05), 0.30, 0.048, transform=axp.transAxes,
                                 facecolor="#37474f", edgecolor="none"))
-        axp.add_patch(Rectangle((0.32, y - 0.052), 0.68, 0.05, transform=axp.transAxes,
+        axp.add_patch(Rectangle((0.30, y - 0.05), 0.70, 0.048, transform=axp.transAxes,
                                 facecolor=bg, edgecolor="none"))
-        axp.text(0.02, y - 0.027, label, color="#cfd8dc", fontsize=8.5, va="center")
-        axp.text(0.34, y - 0.027, val, color="#ffffff", fontsize=8.5, va="center")
-        y -= 0.058
-    y -= 0.02
+        axp.text(0.02, y - 0.026, label, color="#cfd8dc", fontsize=8.3, va="center")
+        axp.text(0.32, y - 0.026, val, color="#ffffff", fontsize=8.0, va="center")
+        y -= 0.055
+    y -= 0.015
     for name, status, ok in steps:
         col = "#26a69a" if ok else "#78909c"
-        mark = "●" if ok else "○"
-        axp.add_patch(Rectangle((0.0, y - 0.05), 1.0, 0.048, transform=axp.transAxes,
+        axp.add_patch(Rectangle((0.0, y - 0.046), 1.0, 0.044, transform=axp.transAxes,
                                 facecolor="#1a1f28", edgecolor="#2a2f3a", lw=0.5))
-        axp.text(0.02, y - 0.026, f"步驟 {name}", color="#b0bec5", fontsize=8, va="center")
-        axp.text(0.42, y - 0.026, f"{mark} {status}", color=col, fontsize=8, va="center")
-        y -= 0.055
+        axp.text(0.02, y - 0.024, f"步驟 {name}", color="#b0bec5", fontsize=8, va="center")
+        axp.text(0.42, y - 0.024, f"{'●' if ok else '○'} {status}", color=col, fontsize=8, va="center")
+        y -= 0.05
 
     fig.tight_layout()
     out = "assets/smc_coach.png"
@@ -178,19 +189,74 @@ def render(df, dirs, events, gaps, steps, bias):
     return out
 
 
+def seven_steps(df, bias, events, gaps):
+    last = df.iloc[-1]
+    recent = [e for e in events if e[0] >= len(df) - 40]
+    has_choch = any(e[1] == "CHoCH" and (e[2] == "↓") == (bias == "空") for e in recent)
+    has_bos = any(e[1] == "BOS" and (e[2] == "↓") == (bias == "空") for e in recent)
+    swept = (df["high"].iloc[-20:].idxmax() >= len(df) - 6) if bias == "空" else \
+            (df["low"].iloc[-20:].idxmin() >= len(df) - 6)
+    in_zone = any(g[3] == ("bear" if bias == "空" else "bull") for g in gaps)
+    react = (last["close"] < last["open"]) if bias == "空" else (last["close"] > last["open"])
+    return [
+        ("1 方向", f"多時框{bias}向推進", True),
+        ("2 區域", "進入訂單區/FVG" if in_zone else "等待進入區域", in_zone),
+        ("3 掃蕩", "掃過前高/前低" if swept else "尚未掃蕩", bool(swept)),
+        ("4 轉向", "MSS/CHoCH 完成" if has_choch else "等待轉向", has_choch),
+        ("5 延續", "BOS 完成" if has_bos else "等待延續", has_bos),
+        ("6 回測", "回測新區" if in_zone and has_bos else "等待回測", in_zone and has_bos),
+        ("7 反應K", "反應 K 完成" if react and has_bos else "等待反應 K", react and has_bos),
+    ]
+
+
 def main():
     ex = make_ex()
     print(f"抓 {SYMBOL} 多時框…")
-    dirs = {tf: tf_direction(fetch(ex, tf, 120)) for tf in TFS_DIR}
+    dir_dfs = {tf: fetch(ex, tf, 120) for tf in TFS_DIR}
+    dirs = {tf: tf_direction(d) for tf, d in dir_dfs.items()}
     bias = "空" if list(dirs.values()).count("空") >= list(dirs.values()).count("多") else "多"
     df = fetch(ex, MAIN_TF, BARS)
-    events, _ = structure(df)
+    events = structure(df)
     gaps = fvg(df)
-    steps = seven_steps(df, bias, events)
-    out = render(df, dirs, events, gaps, steps, bias)
-    print(f"  多時框方向: {dirs}  → 整體偏{bias}")
-    print(f"  結構事件: {len(events)} 個  FVG: {len(gaps)} 個")
-    print("  7 步驟:", " | ".join(f"{n}{'✓' if ok else '…'}" for n, _, ok in steps))
+    obs = order_blocks(df, events, bias)
+    steps = seven_steps(df, bias, events, gaps)
+
+    # 面板細節
+    price = df["close"].iat[-1]
+    sw_hi = df["high"].iloc[-30:].max(); sw_lo = df["low"].iloc[-30:].min()
+    if bias == "空":
+        sl, tp = sw_hi * 1.001, sw_lo
+    else:
+        sl, tp = sw_lo * 0.999, sw_hi
+    done = sum(1 for _, _, ok in steps if ok)
+    zone = obs[-1] if obs else (gaps[-1] if gaps else None)
+    if zone and len(zone) >= 3:
+        zlo, zhi = (zone[1], zone[2])
+        progress = (f"進場條件完成 {zlo:,.1f}～{zhi:,.1f}" if done >= 6 else f"等待 第{done+1}步({zlo:,.1f}～{zhi:,.1f})")
+    else:
+        progress = f"等待 第{done+1}步"
+    # 高週期區域：1H 最近的反向擺動
+    h1 = dir_dfs["1h"]; h1_hi, h1_lo = swings(h1)
+    if bias == "空" and h1_hi:
+        nearest = h1["high"].iat[h1_hi[-1]]
+        htf = f"上方最近 1H 區域 @ {nearest:,.1f}"
+    elif h1_lo:
+        nearest = h1["low"].iat[h1_lo[-1]]
+        htf = f"下方最近 1H 區域 @ {nearest:,.1f}"
+    else:
+        htf = "—"
+    # 1H 通道
+    _, _, h1_dn, h1_slope = channel(h1, min(CHAN_LB, len(h1) - 1))
+    chan_dir = "下降通道" if h1_slope < 0 else "上升通道"
+    broke = "·跌破下軌" if (h1_slope < 0 and h1["close"].iat[-1] < h1_dn[-1]) else "·軌道內"
+    extra = {
+        "chan": channel(df), "progress": progress, "ready": done >= 6,
+        "htf": htf, "sl_tp": f"{sl:,.1f} 上方 ／ 目標 {tp:,.1f}" if bias == "空" else f"{sl:,.1f} 下方 ／ 目標 {tp:,.1f}",
+        "chan_txt": chan_dir + broke,
+    }
+    out = render(df, dirs, events, gaps, obs, steps, bias, extra)
+    print(f"  方向 {dirs} → 偏{bias}　結構{len(events)}　FVG{len(gaps)}　訂單區{len(obs)}")
+    print(f"  進場進度: {progress} | SL/TP: {extra['sl_tp']} | 1H: {extra['chan_txt']}")
     print(f"✓ 已輸出 {out}")
 
 

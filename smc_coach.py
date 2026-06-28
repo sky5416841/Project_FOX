@@ -122,12 +122,10 @@ def channel(df, lb=CHAN_LB, project=20):
     return xs, base + up, base + dn, m, len(seg)
 
 
-def render(df, dirs, events, gaps, obs, steps, bias, extra):
-    fig = plt.figure(figsize=(16, 9), facecolor="#0d0f14")
-    gs = fig.add_gridspec(1, 20)
-    ax = fig.add_subplot(gs[0, :13]); axp = fig.add_subplot(gs[0, 13:])
-    for a in (ax, axp): a.set_facecolor("#0d0f14")
-
+def render(df, events, gaps, obs, extra):
+    """只畫 K 線圖(結構/訂單區/缺口/通道)；右側面板交給網頁原生 HTML 渲染(字才不糊)。"""
+    fig, ax = plt.subplots(figsize=(14, 7.6), facecolor="#0d0f14")
+    ax.set_facecolor("#0d0f14")
     for i, r in df.iterrows():
         c = "#26a69a" if r["close"] >= r["open"] else "#ef5350"
         ax.plot([i, i], [r["low"], r["high"]], color=c, lw=0.6)
@@ -169,39 +167,8 @@ def render(df, dirs, events, gaps, obs, steps, bias, extra):
     ax.set_title(f"{SYMBOL}  {MAIN_TF}  ·  SMC 教練", color="#e0e0e0", fontsize=13)
     ax.tick_params(colors="#5B7494"); ax.grid(alpha=0.08)
     for s in ax.spines.values(): s.set_color("#2a2f3a")
-
-    # ── 右側面板 ──
-    axp.axis("off")
-    rows = [
-        ("SMC 教練", f"自動：{bias}單｜同向{bias}方推進", "#1b5e20"),
-        ("方向", " ｜ ".join(f"{tf.upper()} {d}" for tf, d in dirs.items()), "#263238"),
-        ("進場進度", extra["progress"], "#1b5e20" if extra["ready"] else "#263238"),
-        ("高週期區域", extra["htf"], "#4e342e"),
-        ("停損／目標", extra["sl_tp"], "#263238"),
-        ("1H 通道", extra["chan_txt"], "#5d4037"),
-        ("持倉", "無持倉｜方向觀察", "#263238"),
-        ("程式正在等待", f"{bias}方轉向確認流程", "#1b5e20"),
-    ]
-    y = 0.985
-    for label, val, bg in rows:
-        axp.add_patch(Rectangle((0.0, y - 0.05), 0.30, 0.048, transform=axp.transAxes,
-                                facecolor="#37474f", edgecolor="none"))
-        axp.add_patch(Rectangle((0.30, y - 0.05), 0.70, 0.048, transform=axp.transAxes,
-                                facecolor=bg, edgecolor="none"))
-        axp.text(0.02, y - 0.026, label, color="#cfd8dc", fontsize=8.3, va="center")
-        axp.text(0.32, y - 0.026, val, color="#ffffff", fontsize=8.0, va="center")
-        y -= 0.055
-    y -= 0.015
-    for name, status, ok in steps:
-        col = "#26a69a" if ok else "#78909c"
-        axp.add_patch(Rectangle((0.0, y - 0.046), 1.0, 0.044, transform=axp.transAxes,
-                                facecolor="#1a1f28", edgecolor="#2a2f3a", lw=0.5))
-        axp.text(0.02, y - 0.024, f"步驟 {name}", color="#b0bec5", fontsize=8, va="center")
-        axp.text(0.42, y - 0.024, f"{'●' if ok else '○'} {status}", color=col, fontsize=8, va="center")
-        y -= 0.05
-
     fig.tight_layout()
-    return fig                                  # 回傳 Figure(供網頁 st.pyplot / CLI 存檔)
+    return fig                                  # 純 K 線圖(面板用網頁 HTML 另畫)
 
 
 def seven_steps(df, bias, events, gaps):
@@ -275,21 +242,36 @@ def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF):
         "htf": htf, "sl_tp": f"{sl:,.1f} 上方 ／ 目標 {tp:,.1f}" if bias == "空" else f"{sl:,.1f} 下方 ／ 目標 {tp:,.1f}",
         "chan_txt": (chan_dir + broke) if chan_on else f"震盪盤·通道休眠 (ER {er:.2f})",
     }
-    fig = render(df, dirs, events, gaps, obs, steps, bias, extra)
-    summary = {"dirs": dirs, "bias": bias, "n_struct": len(events),
-               "n_fvg": len(gaps), "n_ob": len(obs),
-               "progress": progress, "sl_tp": extra["sl_tp"], "chan": extra["chan_txt"]}
-    return fig, summary
+    fig = render(df, events, gaps, obs, extra)
+    panel = {
+        "rows": [
+            ("SMC 教練", f"自動：{bias}單｜同向{bias}方推進", "#1b5e20"),
+            ("方向", " ｜ ".join(f"{tf.upper()} {d}" for tf, d in dirs.items()), "#263238"),
+            ("進場進度", progress, "#1b5e20" if done >= 6 else "#263238"),
+            ("高週期區域", htf, "#4e342e"),
+            ("停損／目標", extra["sl_tp"], "#263238"),
+            ("1H 通道", extra["chan_txt"], "#5d4037"),
+            ("持倉", "無持倉｜方向觀察", "#263238"),
+            ("程式正在等待", f"{bias}方轉向確認流程", "#1b5e20"),
+        ],
+        "steps": steps,
+        "summary": {"dirs": dirs, "bias": bias, "n_struct": len(events),
+                    "n_fvg": len(gaps), "n_ob": len(obs), "chan": extra["chan_txt"]},
+    }
+    return fig, panel
 
 
 def main():
     print(f"抓 {SYMBOL} 多時框…")
-    fig, s = build_coach()
+    fig, panel = build_coach()
     fig.savefig("assets/smc_coach.png", dpi=170, facecolor="#0d0f14")
     import matplotlib.pyplot as _plt; _plt.close(fig)
-    print(f"  方向 {s['dirs']} → 偏{s['bias']}　結構{s['n_struct']}　FVG{s['n_fvg']}　訂單區{s['n_ob']}")
-    print(f"  進場進度: {s['progress']} | SL/TP: {s['sl_tp']} | 1H: {s['chan']}")
-    print("✓ 已輸出 assets/smc_coach.png")
+    print("── 教練面板 ──")
+    for label, val, _ in panel["rows"]:
+        print(f"  {label}：{val}")
+    for name, status, ok in panel["steps"]:
+        print(f"  步驟 {name}  {'●' if ok else '○'} {status}")
+    print("✓ 已輸出 assets/smc_coach.png(純K線圖；面板上方為文字版)")
 
 
 if __name__ == "__main__":

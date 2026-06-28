@@ -2696,12 +2696,12 @@ with _tab7:
                 import importlib, smc_coach as _smc
                 importlib.reload(_smc)          # 每次點都載最新程式(改 smc_coach.py 不必重啟伺服器)
                 _ex = engine_core.make_exchange()
-                _fig, _sm = _smc.build_coach(_ex, symbol=_smc_sym, main_tf=_smc_tf)
+                _fig, _panel = _smc.build_coach(_ex, symbol=_smc_sym, main_tf=_smc_tf)
                 from io import BytesIO
                 _buf = BytesIO()
-                _fig.savefig(_buf, format="png", dpi=170, facecolor="#0d0f14", bbox_inches="tight")
+                _fig.savefig(_buf, format="png", dpi=150, facecolor="#0d0f14", bbox_inches="tight")
                 import matplotlib.pyplot as _plt; _plt.close(_fig)
-                st.session_state.smc_coach = {"png": _buf.getvalue(), "sum": _sm,
+                st.session_state.smc_coach = {"png": _buf.getvalue(), "panel": _panel,
                                               "fname": f"{_smc_sym.replace('/', '_')}_{_smc_tf}_SMC_Coach"}
             except Exception as _e:
                 st.session_state.smc_coach = {"error": str(_e)}
@@ -2710,14 +2710,28 @@ with _tab7:
     if _sc and "error" in _sc:
         st.error(f"SMC 分析失敗：{_sc['error']}")
     elif _sc:
-        _s = _sc["sum"]
-        _m1, _m2, _m3 = st.columns(3)
-        _m1.metric("整體偏向", f"{_s['bias']} 方")
-        _m2.metric("結構事件", f"{_s['n_struct']}", f"訂單區 {_s['n_ob']} · FVG {_s['n_fvg']}")
-        _m3.metric("1H 通道", _s["chan"])
-        st.image(_sc["png"], width="stretch")
-        st.download_button("🖼️ 下載 SMC 圖", data=_sc["png"],
-                           file_name=f"{_sc['fname']}.png", mime="image/png", key="smc_dl")
+        _p = _sc["panel"]
+        _chart_col, _panel_col = st.columns([3, 2])
+        with _chart_col:
+            st.image(_sc["png"], width="stretch")
+            st.download_button("🖼️ 下載 K 線圖", data=_sc["png"],
+                               file_name=f"{_sc['fname']}.png", mime="image/png", key="smc_dl")
+        with _panel_col:
+            # 狀態列（網頁原生 HTML，字清晰不模糊）
+            _html = "<div style='font-family:sans-serif'>"
+            for _label, _val, _bg in _p["rows"]:
+                _html += (f"<div style='display:flex;margin-bottom:3px;border-radius:3px;overflow:hidden'>"
+                          f"<div style='background:#37474f;color:#cfd8dc;padding:4px 8px;min-width:88px;font-size:0.78rem'>{_label}</div>"
+                          f"<div style='background:{_bg};color:#fff;padding:4px 8px;flex:1;font-size:0.78rem'>{_val}</div></div>")
+            _html += "<div style='height:8px'></div>"
+            for _name, _status, _ok in _p["steps"]:
+                _c = "#26a69a" if _ok else "#78909c"
+                _mk = "●" if _ok else "○"
+                _html += (f"<div style='display:flex;margin-bottom:2px;background:#1a1f28;border-radius:3px'>"
+                          f"<div style='color:#b0bec5;padding:3px 8px;min-width:88px;font-size:0.76rem'>步驟 {_name}</div>"
+                          f"<div style='color:{_c};padding:3px 8px;flex:1;font-size:0.76rem'>{_mk} {_status}</div></div>")
+            _html += "</div>"
+            st.markdown(_html, unsafe_allow_html=True)
     else:
         st.info("選市場/時框後按「跑 SMC 教練分析」，產生多時框結構面板。")
 

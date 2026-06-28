@@ -24,7 +24,7 @@ MAIN_TF = "15m"
 TFS_DIR = ["1d", "4h", "1h", "15m"]
 BARS    = 180
 SWING_K = 2
-CHAN_LB = 110          # 通道回歸取最近幾根
+CHAN_LB = 70           # 通道取最近幾根(貼近當前趨勢段)
 
 
 def make_ex():
@@ -100,15 +100,26 @@ def order_blocks(df, events, bias):
     return obs
 
 
-def channel(df, lb=CHAN_LB):
-    seg = df.iloc[-lb:]
+def channel(df, lb=CHAN_LB, project=20):
+    """沿最近一段擺動結構畫通道：用擺動高/低點回歸定方向，平行包住價格，並向前虛線投影。
+    回傳 (xs, up_line, dn_line, slope)。xs 含向前 project 根的投影。"""
+    n0 = max(0, len(df) - lb)
+    seg = df.iloc[n0:]
     x = np.arange(len(seg))
-    m, b = np.polyfit(x, seg["close"].values, 1)
-    mid = m * x + b
+    hi, lo = swings(seg)
+    # 優先用擺動點定斜率(更貼結構)；點太少才退回全段回歸
+    pts_x = (hi + lo)
+    if len(pts_x) >= 4:
+        ph = [seg["high"].iat[i] for i in hi] + [seg["low"].iat[i] for i in lo]
+        m = np.polyfit(pts_x, ph, 1)[0]
+    else:
+        m = np.polyfit(x, seg["close"].values, 1)[0]
+    mid = m * x + (seg["close"].values - m * x).mean()
     up = (seg["high"].values - mid).max()
     dn = (seg["low"].values - mid).min()
-    xs = np.arange(len(df) - lb, len(df))
-    return xs, mid + up, mid + dn, m
+    xs = np.arange(n0, len(df) + project)            # 含向前投影
+    base = m * (xs - n0) + (seg["close"].values - m * x).mean()
+    return xs, base + up, base + dn, m, len(seg)
 
 
 def render(df, dirs, events, gaps, obs, steps, bias, extra):
@@ -123,10 +134,16 @@ def render(df, dirs, events, gaps, obs, steps, bias, extra):
         ax.plot([i, i], [r["open"], r["close"]], color=c, lw=2.2)
     ax.plot(df.index, ema(df["close"], 50), color="#ffd54f", lw=1.2)
 
-    # 下降通道
-    xs, up_line, dn_line, slope = extra["chan"]
-    ax.plot(xs, up_line, color="#26c6da", lw=1.1, alpha=0.8)
-    ax.plot(xs, dn_line, color="#26c6da", lw=1.1, alpha=0.8)
+    # 通道 — A方案：只有趨勢盤(ER夠高)才畫；C方案：畫得淡、退居二線
+    xs, up_line, dn_line, slope, seglen = extra["chan"]
+    if extra.get("chan_on"):
+        nreal = (xs < len(df)).sum()
+        for line in (up_line, dn_line):
+            ax.plot(xs[:nreal], line[:nreal], color="#4dd0e1", lw=0.8, alpha=0.40, ls=(0, (5, 4)))
+            ax.plot(xs[nreal - 1:], line[nreal - 1:], color="#4dd0e1", lw=0.7, alpha=0.25, ls="--")
+    else:
+        ax.text(0.012, 0.97, f"震盪盤 · 通道休眠 (ER {extra.get('er', 0):.2f})",
+                transform=ax.transAxes, color="#607d8b", fontsize=9, va="top")
 
     # 訂單區(延伸到右；標籤放框「下緣左側」，與缺口錯開)
     for j, lo, hi, label in obs:
@@ -142,8 +159,8 @@ def render(df, dirs, events, gaps, obs, steps, bias, extra):
         ax.text(i - 2, hi, "空方缺口" if kind == "bear" else "多方缺口",
                 color=col, fontsize=7, va="bottom", ha="left")
 
-    # 結構標記
-    for i, ev, d in events[-12:]:
+    # 結構標記(減量,只留最近 7 個,降低雜訊)
+    for i, ev, d in events[-7:]:
         y = df["high"].iat[i] if d == "↑" else df["low"].iat[i]
         col = "#ef5350" if ev == "CHoCH" else "#ffa726"
         ax.text(i, y, f"{ev}{d}", color=col, fontsize=7,
@@ -244,14 +261,19 @@ def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF):
         htf = f"下方最近 1H 區域 @ {nearest:,.1f}"
     else:
         htf = "—"
-    # 1H 通道
-    _, _, h1_dn, h1_slope = channel(h1, min(CHAN_LB, len(h1) - 1))
+    # 1H 通道（資訊用）
+    _, _, h1_dn, h1_slope, _ = channel(h1, min(CHAN_LB, len(h1) - 1), project=0)
     chan_dir = "下降通道" if h1_slope < 0 else "上升通道"
     broke = "·跌破下軌" if (h1_slope < 0 and h1["close"].iat[-1] < h1_dn[-1]) else "·軌道內"
+    # A 方案：效率比率閘門 — 只有「明確趨勢盤」才畫主圖通道，震盪盤休眠（不硬畫）
+    _seg = df["close"].iloc[-CHAN_LB:].values
+    er = abs(_seg[-1] - _seg[0]) / (np.abs(np.diff(_seg)).sum() or 1)
+    chan_on = er >= 0.40
     extra = {
-        "chan": channel(df), "progress": progress, "ready": done >= 6,
+        "chan": channel(df), "chan_on": chan_on, "er": er,
+        "progress": progress, "ready": done >= 6,
         "htf": htf, "sl_tp": f"{sl:,.1f} 上方 ／ 目標 {tp:,.1f}" if bias == "空" else f"{sl:,.1f} 下方 ／ 目標 {tp:,.1f}",
-        "chan_txt": chan_dir + broke,
+        "chan_txt": (chan_dir + broke) if chan_on else f"震盪盤·通道休眠 (ER {er:.2f})",
     }
     fig = render(df, dirs, events, gaps, obs, steps, bias, extra)
     summary = {"dirs": dirs, "bias": bias, "n_struct": len(events),

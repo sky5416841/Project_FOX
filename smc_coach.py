@@ -79,7 +79,7 @@ def fvg(df):
         h2, l2 = df["high"].iat[i], df["low"].iat[i]
         if l2 > h0:   out.append((i, h0, l2, "bull"))
         elif h2 < l0: out.append((i, h2, l0, "bear"))
-    return out[-3:]
+    return out[-2:]
 
 
 def order_blocks(df, events, bias):
@@ -128,19 +128,19 @@ def render(df, dirs, events, gaps, obs, steps, bias, extra):
     ax.plot(xs, up_line, color="#26c6da", lw=1.1, alpha=0.8)
     ax.plot(xs, dn_line, color="#26c6da", lw=1.1, alpha=0.8)
 
-    # 訂單區(延伸到右)
+    # 訂單區(延伸到右；標籤放框「下緣左側」，與缺口錯開)
     for j, lo, hi, label in obs:
         ax.add_patch(Rectangle((j, lo), len(df) - j, hi - lo,
                                facecolor="#6d4c41", alpha=0.30, edgecolor="#a1887f", lw=1.0))
-        ax.text((j + len(df)) / 2, hi, label, color="#d7ccc8", fontsize=9, va="bottom", ha="center")
+        ax.text(j + 1, lo, label, color="#d7ccc8", fontsize=8, va="top", ha="left")
 
-    # FVG 缺口(標籤放左緣、錯開避免重疊)
-    for k, (i, lo, hi, kind) in enumerate(gaps):
+    # FVG 缺口(標籤放框「上緣左側」，與訂單區上下分開避免重疊)
+    for i, lo, hi, kind in gaps:
         col = "#7e57c2" if kind == "bear" else "#5c6bc0"
         ax.add_patch(Rectangle((i - 2, lo), len(df) - i + 2, hi - lo,
                                facecolor=col, alpha=0.16, edgecolor=col, lw=0.7))
         ax.text(i - 2, hi, "空方缺口" if kind == "bear" else "多方缺口",
-                color=col, fontsize=7.5, va="bottom", ha="left")
+                color=col, fontsize=7, va="bottom", ha="left")
 
     # 結構標記
     for i, ev, d in events[-12:]:

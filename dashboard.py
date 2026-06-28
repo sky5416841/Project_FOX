@@ -2699,7 +2699,7 @@ with _tab7:
                 _fig, _sm = _smc.build_coach(_ex, symbol=_smc_sym, main_tf=_smc_tf)
                 from io import BytesIO
                 _buf = BytesIO()
-                _fig.savefig(_buf, format="png", dpi=110, facecolor="#0d0f14", bbox_inches="tight")
+                _fig.savefig(_buf, format="png", dpi=170, facecolor="#0d0f14", bbox_inches="tight")
                 import matplotlib.pyplot as _plt; _plt.close(_fig)
                 st.session_state.smc_coach = {"png": _buf.getvalue(), "sum": _sm,
                                               "fname": f"{_smc_sym.replace('/', '_')}_{_smc_tf}_SMC_Coach"}

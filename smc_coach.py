@@ -285,7 +285,7 @@ def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF):
 def main():
     print(f"抓 {SYMBOL} 多時框…")
     fig, s = build_coach()
-    fig.savefig("assets/smc_coach.png", dpi=110, facecolor="#0d0f14")
+    fig.savefig("assets/smc_coach.png", dpi=170, facecolor="#0d0f14")
     import matplotlib.pyplot as _plt; _plt.close(fig)
     print(f"  方向 {s['dirs']} → 偏{s['bias']}　結構{s['n_struct']}　FVG{s['n_fvg']}　訂單區{s['n_ob']}")
     print(f"  進場進度: {s['progress']} | SL/TP: {s['sl_tp']} | 1H: {s['chan']}")

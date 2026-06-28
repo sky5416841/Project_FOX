@@ -2536,6 +2536,29 @@ with _tab5:
         _c3.metric("已平倉筆數", f"{_nclosed}")
         _c4.metric("累計手續費", f"-${_fees:,.2f}")
 
+        # ── ML 數據孵化進度（交易帳戶常為空，但掃針一直在收集進 ML 資料）──────
+        st.markdown("##### 🧬 ML 數據孵化（每個掃針都記錄，餵未來模型）")
+        _ml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ml_lab", "live_ml_features.csv")
+        if os.path.exists(_ml_path):
+            try:
+                _mldf = pd.read_csv(_ml_path)
+                _lbl = pd.to_numeric(_mldf["label"], errors="coerce")
+                _win = int((_lbl == 1).sum()); _loss = int((_lbl == 0).sum())
+                _pend = int(_lbl.isna().sum()); _usable = _win + _loss
+                _opened = int(pd.to_numeric(_mldf.get("opened", 0), errors="coerce").fillna(0).sum())
+                _q1, _q2, _q3, _q4 = st.columns(4)
+                _q1.metric("已收集掃針", f"{len(_mldf)}", f"目標 500（{len(_mldf)/500:.0%}）")
+                _q2.metric("已結算", f"{_usable}", f"勝率 {(_win/_usable):.0%}" if _usable else "—")
+                _q3.metric("等待結算", f"{_pend}")
+                _q4.metric("通過雙過濾開倉", f"{_opened}", "Delta+OBI 很嚴格")
+                st.progress(min(len(_mldf) / 500, 1.0))
+                st.caption("⬆️ 交易帳戶常是空的，因為『掃針 + Delta + OBI 雙過濾』極嚴格、很少真開倉；"
+                           "但每個掃針都記進 ML 資料庫，這才是 PO3 真正在累積的東西。")
+            except Exception as _e:
+                st.caption(f"ML 資料讀取失敗：{_e}")
+        else:
+            st.caption("尚未偵測到掃針（`ml_lab/live_ml_features.csv` 未生成）— 掃針稀有，正常。")
+
         st.markdown("##### 📌 當前虛擬持倉 (Open)")
         if _open:
             _odf = pd.DataFrame(_open)[

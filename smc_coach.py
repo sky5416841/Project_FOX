@@ -184,9 +184,7 @@ def render(df, dirs, events, gaps, obs, steps, bias, extra):
         y -= 0.05
 
     fig.tight_layout()
-    out = "assets/smc_coach.png"
-    fig.savefig(out, dpi=110, facecolor="#0d0f14"); plt.close(fig)
-    return out
+    return fig                                  # 回傳 Figure(供網頁 st.pyplot / CLI 存檔)
 
 
 def seven_steps(df, bias, events, gaps):
@@ -209,20 +207,21 @@ def seven_steps(df, bias, events, gaps):
     ]
 
 
-def main():
-    ex = make_ex()
-    print(f"抓 {SYMBOL} 多時框…")
+def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF):
+    """跑完整 SMC 教練分析，回傳 (fig, summary)。供網頁 st.pyplot 與 CLI 共用。"""
+    ex = ex or make_ex()
+    global SYMBOL, MAIN_TF
+    SYMBOL, MAIN_TF = symbol, main_tf
     dir_dfs = {tf: fetch(ex, tf, 120) for tf in TFS_DIR}
     dirs = {tf: tf_direction(d) for tf, d in dir_dfs.items()}
     bias = "空" if list(dirs.values()).count("空") >= list(dirs.values()).count("多") else "多"
-    df = fetch(ex, MAIN_TF, BARS)
+    df = fetch(ex, main_tf, BARS)
     events = structure(df)
     gaps = fvg(df)
     obs = order_blocks(df, events, bias)
     steps = seven_steps(df, bias, events, gaps)
 
     # 面板細節
-    price = df["close"].iat[-1]
     sw_hi = df["high"].iloc[-30:].max(); sw_lo = df["low"].iloc[-30:].min()
     if bias == "空":
         sl, tp = sw_hi * 1.001, sw_lo
@@ -254,10 +253,21 @@ def main():
         "htf": htf, "sl_tp": f"{sl:,.1f} 上方 ／ 目標 {tp:,.1f}" if bias == "空" else f"{sl:,.1f} 下方 ／ 目標 {tp:,.1f}",
         "chan_txt": chan_dir + broke,
     }
-    out = render(df, dirs, events, gaps, obs, steps, bias, extra)
-    print(f"  方向 {dirs} → 偏{bias}　結構{len(events)}　FVG{len(gaps)}　訂單區{len(obs)}")
-    print(f"  進場進度: {progress} | SL/TP: {extra['sl_tp']} | 1H: {extra['chan_txt']}")
-    print(f"✓ 已輸出 {out}")
+    fig = render(df, dirs, events, gaps, obs, steps, bias, extra)
+    summary = {"dirs": dirs, "bias": bias, "n_struct": len(events),
+               "n_fvg": len(gaps), "n_ob": len(obs),
+               "progress": progress, "sl_tp": extra["sl_tp"], "chan": extra["chan_txt"]}
+    return fig, summary
+
+
+def main():
+    print(f"抓 {SYMBOL} 多時框…")
+    fig, s = build_coach()
+    fig.savefig("assets/smc_coach.png", dpi=110, facecolor="#0d0f14")
+    import matplotlib.pyplot as _plt; _plt.close(fig)
+    print(f"  方向 {s['dirs']} → 偏{s['bias']}　結構{s['n_struct']}　FVG{s['n_fvg']}　訂單區{s['n_ob']}")
+    print(f"  進場進度: {s['progress']} | SL/TP: {s['sl_tp']} | 1H: {s['chan']}")
+    print("✓ 已輸出 assets/smc_coach.png")
 
 
 if __name__ == "__main__":

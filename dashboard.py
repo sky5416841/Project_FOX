@@ -2267,8 +2267,8 @@ def frag_funding_radar() -> None:
 # 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
 # 無論使用者停在哪個 Tab，session_state 寫入與資料更新均持續進行。
 # ═════════════════════════════════════════════════════════════════════════════
-_tab1, _tab2, _tab3, _tab4, _tab5, _tab6 = st.tabs(
-    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室", "🩺 市場體檢"])
+_tab1, _tab2, _tab3, _tab4, _tab5, _tab6, _tab7 = st.tabs(
+    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室", "🩺 市場體檢", "🎯 SMC 教練"])
 
 # ── Tab 1：戰術指揮大廳 ────────────────────────────────────────────────────
 with _tab1:
@@ -2673,6 +2673,52 @@ with _tab6:
         st.caption("⚠ 啟發式指標、非投資建議。相關性會隨行情變（恐慌時全衝向 1）。")
     else:
         st.info("點上方按鈕跑一次市場體檢。建議下單前看一眼：現在適不適合做趨勢、你的倉真分散嗎。")
+
+
+# ── Tab 7：🎯 SMC 教練（多時框結構 + 訂單區/缺口/通道 + 7步驟，手動觸發）──────
+with _tab7:
+    st.markdown(
+        "#### 🎯 SMC 教練 &nbsp;"
+        "<span style='font-size:0.78rem;color:#5B7494;font-weight:400'>"
+        "多時框結構分析 · 唯讀 · 手動觸發</span>",
+        unsafe_allow_html=True,
+    )
+    st.caption("把命令列的 `smc_coach.py` 搬上網頁：多時框方向 + BOS/CHoCH 結構 + 訂單區/FVG缺口 "
+               "+ 下降通道 + 7 步驟進場流程。⚠️ SMC 無 edge，看盤輔助/盤感教練用，非賺錢訊號。")
+    _sc1, _sc2 = st.columns([1, 1])
+    with _sc1:
+        _smc_sym = st.selectbox("市場", ["BTC/USDT", "ETH/USDT", "SOL/USDT"], key="smc_sym")
+    with _sc2:
+        _smc_tf = st.selectbox("主時框", ["15m", "5m", "1h"], key="smc_tf")
+    if st.button("🎯 跑 SMC 教練分析", key="smc_btn"):
+        with st.spinner(f"抓 {_smc_sym} 多時框並分析中…"):
+            try:
+                import smc_coach as _smc
+                _ex = engine_core.make_exchange()
+                _fig, _sm = _smc.build_coach(_ex, symbol=_smc_sym, main_tf=_smc_tf)
+                from io import BytesIO
+                _buf = BytesIO()
+                _fig.savefig(_buf, format="png", dpi=110, facecolor="#0d0f14", bbox_inches="tight")
+                import matplotlib.pyplot as _plt; _plt.close(_fig)
+                st.session_state.smc_coach = {"png": _buf.getvalue(), "sum": _sm,
+                                              "fname": f"{_smc_sym.replace('/', '_')}_{_smc_tf}_SMC_Coach"}
+            except Exception as _e:
+                st.session_state.smc_coach = {"error": str(_e)}
+
+    _sc = st.session_state.get("smc_coach")
+    if _sc and "error" in _sc:
+        st.error(f"SMC 分析失敗：{_sc['error']}")
+    elif _sc:
+        _s = _sc["sum"]
+        _m1, _m2, _m3 = st.columns(3)
+        _m1.metric("整體偏向", f"{_s['bias']} 方")
+        _m2.metric("結構事件", f"{_s['n_struct']}", f"訂單區 {_s['n_ob']} · FVG {_s['n_fvg']}")
+        _m3.metric("1H 通道", _s["chan"])
+        st.image(_sc["png"], width="stretch")
+        st.download_button("🖼️ 下載 SMC 圖", data=_sc["png"],
+                           file_name=f"{_sc['fname']}.png", mime="image/png", key="smc_dl")
+    else:
+        st.info("選市場/時框後按「跑 SMC 教練分析」，產生多時框結構面板。")
 
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────

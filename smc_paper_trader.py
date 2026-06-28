@@ -28,6 +28,7 @@ START_EQUITY = 10_000.0
 RISK_PCT     = 0.01
 TAKER_FEE    = 0.0004
 INTERVAL     = 300
+MAX_RUNTIME  = 6 * 3600  # 每跑滿 6 小時優雅退出 → 看門狗重啟,釋放累積記憶體
 STATE_FILE   = "smc_paper_state.json"
 CLOSED_CSV   = "smc_paper_closed.csv"
 ML_CSV       = os.path.join("ml_lab", "smc_ml_features.csv")
@@ -158,9 +159,13 @@ def main():
     if args.once:
         print(f"[{now_iso()}] tick(once)"); tick(state, ex)
     else:
+        started = time.time()
         while True:
             print(f"[{now_iso()}] tick"); tick(state, ex)
             print(f"  狀態:權益 ${state['equity']:,.2f} 持倉 {len(state['open'])} 已平 {state['closed_count']}")
+            if time.time() - started > MAX_RUNTIME:   # 防記憶體漏:定時優雅退出,看門狗重啟
+                print(f"[{now_iso()}] 已跑滿 {MAX_RUNTIME/3600:.0f}h,優雅退出讓看門狗重啟(釋放記憶體)")
+                return
             time.sleep(INTERVAL)
 
 

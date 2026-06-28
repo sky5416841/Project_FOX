@@ -40,6 +40,7 @@ RISK_PCT     = 0.01      # 每筆風險 = 權益 × 1%(打到 SL 約虧 1R)
 LEVERAGE     = 5         # 僅影響保證金占用顯示;盈虧由 qty×價差決定
 TAKER_FEE    = 0.0004    # 合約吃單手續費(開+平各一次)
 INTERVAL     = 300       # 輪詢秒數(5 分鐘 = 一根 5m K 棒)
+MAX_RUNTIME  = 6 * 3600  # 每跑滿 6 小時優雅退出 → 看門狗重啟,釋放累積記憶體
 STATE_FILE   = "po3_paper_state.json"
 CLOSED_CSV   = "po3_paper_closed.csv"
 
@@ -239,9 +240,13 @@ def main():
         print(f"[{now_iso()}] tick(once)")
         tick(state, ex); print_status(state); return
 
+    started = time.time()
     while True:
         print(f"[{now_iso()}] tick")
         tick(state, ex); print_status(state)
+        if time.time() - started > MAX_RUNTIME:      # 防記憶體漏:定時優雅退出,看門狗重啟(狀態已存檔)
+            print(f"[{now_iso()}] 已跑滿 {MAX_RUNTIME/3600:.0f}h,優雅退出讓看門狗重啟(釋放記憶體)")
+            return
         time.sleep(INTERVAL)
 
 

@@ -43,7 +43,8 @@ def atr(df, n=ATR_LEN):
 
 
 def run(df, mode):
-    """回傳每筆交易的 R 倍數 list。mode = 'fixed' or 'trail'。"""
+    """回傳每筆交易的 R 倍數 list。mode = 'fixed' / 'trail' / 'breakeven'。
+    breakeven=保本移動:到 +0.5R 就把停損推到進場價(平手),避免賺錢單變 -1R。"""
     df = df.copy(); df["atr"]=atr(df)
     hh = df["high"].rolling(LOOKBACK).max()
     Rs, i = [], LOOKBACK+ATR_LEN
@@ -66,9 +67,11 @@ def run(df, mode):
             if mode=="trail":
                 hwm = max(hwm, hi)
                 stop = max(stop, hwm - TRAIL_ATR*a)   # 移動停損只往上抬
+            elif mode=="breakeven" and hi >= entry + 0.5*risk:
+                stop = max(stop, entry)                # 到 +0.5R → 停損推到平手
             if lo <= stop:                             # 先檢查停損(保守)
                 exit_R = (stop-entry)/risk; break
-            if mode=="fixed" and hi >= tp:
+            if mode in ("fixed","breakeven") and hi >= tp:
                 exit_R = (tp-entry)/risk; break
             j += 1
         if exit_R is None:                             # 逾時以收盤平
@@ -99,9 +102,11 @@ def main():
     report("A. 固定停利 +2R（封頂）", run(df,"fixed"))
     print("-"*60)
     report("B. 移動停利（讓利潤奔跑）", run(df,"trail"))
+    print("-"*60)
+    report("C. 保本移動（+0.5R 推平手，SMC 想補的洞）", run(df,"breakeven"))
     print("="*60)
-    print("  看點：B 通常『勝率更低、平均賠差不多、但平均贏與最大單筆贏更大』")
-    print("  → 這就是『大贏小賠』的形狀：靠少數大魚，不靠勝率。")
+    print("  看點：三種出場的『損益形狀』不同，但若進場沒 edge，")
+    print("  扣費後期望值(每筆均值)三個都會是負的 → 出場救不了沒 edge 的進場。")
 
 
 if __name__ == "__main__":

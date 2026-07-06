@@ -2267,8 +2267,8 @@ def frag_funding_radar() -> None:
 # 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
 # 無論使用者停在哪個 Tab，session_state 寫入與資料更新均持續進行。
 # ═════════════════════════════════════════════════════════════════════════════
-_tab1, _tab2, _tab3, _tab4, _tab5, _tab6, _tab7 = st.tabs(
-    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室", "🩺 市場體檢", "🎯 SMC 教練"])
+_tab1, _tab2, _tab3, _tab4, _tab5, _tab6, _tab7, _tab8 = st.tabs(
+    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室", "🩺 市場體檢", "🎯 SMC 教練", "🩸 抄底逃頂"])
 
 # ── Tab 1：戰術指揮大廳 ────────────────────────────────────────────────────
 with _tab1:
@@ -2776,6 +2776,41 @@ with _tab7:
             st.markdown(_smc_panel_html(_ch["panel"]), unsafe_allow_html=True)
     else:
         st.info("選市場/時框後按「跑 SMC 教練分析」。勾「三時框一次看」可一次出 4h/1h/15m 三張圖。")
+
+
+# ── Tab 8：🩸 抄底逃頂（極端雷達，手動交易參謀）─────────────────────────────
+with _tab8:
+    st.markdown("#### 🩸 抄底 / 逃頂 極端雷達 &nbsp;"
+                "<span style='font-size:0.78rem;color:#5B7494;font-weight:400'>手動交易的紀律參謀 · 唯讀</span>",
+                unsafe_allow_html=True)
+    st.caption("只標『真極端』(RSI極端+偏離EMA+資金費)，幫你避開最會賠的中間地帶。"
+               "⚠️ 極端≠保證反轉、樣本小；當『挑時機』參謀,配低槓桿+1%風控。土狗深跌可能是價值陷阱→建議勾主流。")
+    _em_major = st.checkbox("只看主流幣（過濾暴跌土狗的價值陷阱，推薦）", value=True, key="em_major")
+    if st.button("🩸 掃描極端", key="em_btn"):
+        with st.spinner("掃描全市場極端…"):
+            try:
+                import importlib, extreme_radar as _er
+                importlib.reload(_er)
+                _dips, _tops = _er.scan_extremes(engine_core.make_exchange(), majors_only=_em_major)
+                st.session_state.extreme = {"dips": _dips, "tops": _tops}
+            except Exception as _e:
+                st.session_state.extreme = {"error": str(_e)}
+    _ex_r = st.session_state.get("extreme")
+    if _ex_r and "error" in _ex_r:
+        st.error(f"掃描失敗：{_ex_r['error']}")
+    elif _ex_r:
+        import pandas as _pd
+        _cA, _cB = st.columns(2)
+        with _cA:
+            st.markdown("##### 🩸 抄底候選（深超賣）")
+            st.dataframe(_pd.DataFrame(_ex_r["dips"]) if _ex_r["dips"] else _pd.DataFrame(),
+                         width="stretch", hide_index=True) if _ex_r["dips"] else st.caption("目前沒有極端 — 別硬找")
+        with _cB:
+            st.markdown("##### 🚀 逃頂候選（深超買）")
+            st.dataframe(_pd.DataFrame(_ex_r["tops"]) if _ex_r["tops"] else _pd.DataFrame(),
+                         width="stretch", hide_index=True) if _ex_r["tops"] else st.caption("目前沒有極端 — 別硬找")
+    else:
+        st.info("按「掃描極端」找現在的抄底/逃頂候選。沒有極端時它會誠實說沒有 — 那也是紀律。")
 
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────

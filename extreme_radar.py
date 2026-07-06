@@ -40,15 +40,21 @@ def ema(c, n):
     return e
 
 
-def main():
-    ex = ccxt.binance({"options": {"defaultType": "future"}, "enableRateLimit": True})
-    print("抓全市場資金費與成交量…")
+MAJORS = {"BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "LTC",
+          "DOT", "TRX", "BCH", "MATIC", "UNI", "ATOM", "ETC", "FIL", "APT", "ARB",
+          "OP", "NEAR", "INJ", "SUI", "SEI", "TIA", "AAVE", "MKR"}
+
+
+def scan_extremes(ex=None, majors_only=False):
+    """掃描並回傳 (dips, tops)，每筆 dict。majors_only=只看主流幣(避開暴跌土狗價值陷阱)。"""
+    ex = ex or ccxt.binance({"options": {"defaultType": "future"}, "enableRateLimit": True})
     fr = ex.fetch_funding_rates()
     tk = ex.fetch_tickers()
-    # 取成交量前 N 大的 USDT 永續
     perps = [(s, tk[s].get("quoteVolume") or 0) for s in tk
              if s.endswith(":USDT") and tk.get(s)]
     perps = [s for s, _ in sorted(perps, key=lambda x: -x[1])[:SYMBOLS_LIMIT]]
+    if majors_only:
+        perps = [s for s in perps if s.split("/")[0] in MAJORS]
 
     dips, tops = [], []
     for s in perps:
@@ -74,22 +80,26 @@ def main():
             score = (r - RSI_HIGH) + dev + (5 if r >= RSI_XHIGH else 0) + (5 if ann_fund > 40 else 0)
             tops.append((score, base, r, dev, chg, ann_fund))
 
-    def show(title, rows, xlab):
-        print("\n" + "=" * 66); print(f"  {title}（{len(rows)} 個）"); print("=" * 66)
-        if not rows:
-            print("  目前沒有符合的極端 —— 沒有就是沒有,別硬找(這才是紀律)")
-            return
-        print(f"  {'幣種':<12}{'RSI':>6}{'偏離EMA':>9}{'近20h':>8}{'年化資金費':>11}   {xlab}")
-        for sc, b, r, dev, chg, af in sorted(rows, reverse=True):
-            flag = "🔥深極端" if sc >= 15 else "· 一般極端"
-            print(f"  {b:<12}{r:>6.0f}{dev:>8.1f}%{chg:>7.1f}%{af:>10.0f}%   {flag}")
+    key = lambda t: -t[0]
+    to_dict = lambda t: {"score": round(t[0], 1), "symbol": t[1], "rsi": round(t[2]),
+                         "dev": round(t[3], 1), "chg": round(t[4], 1), "fund": round(t[5]),
+                         "flag": "🔥深極端" if t[0] >= 15 else "· 一般極端"}
+    return [to_dict(t) for t in sorted(dips, key=key)], [to_dict(t) for t in sorted(tops, key=key)]
 
-    show("🩸 抄底候選（深超賣 / 別在中間接刀）", dips, "強度")
-    show("🚀 逃頂候選（深超買 / 別追高）", tops, "強度")
-    print("\n" + "-" * 66)
-    print("  ⚠ 極端≠保證反轉,只是機率比中間好一點且樣本小。")
-    print("  用法:當參謀挑『時機』,不是訊號。務必低槓桿 + 1% 風控(risk_sizer.py)。")
-    print("  抄底抄在刀口上照樣會被砍 —— 這工具只幫你別抄在中間絞肉機。")
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(); ap.add_argument("--majors", action="store_true"); a = ap.parse_args()
+    print(f"抓全市場…{'(只看主流幣)' if a.majors else ''}")
+    dips, tops = scan_extremes(majors_only=a.majors)
+    for title, rows in [("🩸 抄底候選（深超賣 / 別在中間接刀）", dips), ("🚀 逃頂候選（深超買 / 別追高）", tops)]:
+        print("\n" + "=" * 60); print(f"  {title}（{len(rows)} 個）"); print("=" * 60)
+        if not rows:
+            print("  目前沒有極端 —— 沒有就是沒有,別硬找(這才是紀律)"); continue
+        print(f"  {'幣種':<10}{'RSI':>5}{'偏離EMA':>9}{'近20h':>8}{'年化費':>8}   ")
+        for d in rows:
+            print(f"  {d['symbol']:<10}{d['rsi']:>5}{d['dev']:>8}%{d['chg']:>7}%{d['fund']:>7}%   {d['flag']}")
+    print("\n  ⚠ 極端≠保證反轉,樣本小。當『挑時機』參謀,配低槓桿+1%風控。土狗深跌可能是價值陷阱→建議 --majors")
 
 
 if __name__ == "__main__":

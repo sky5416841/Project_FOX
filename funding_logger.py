@@ -195,16 +195,77 @@ def carry(symbol=None):
     print("  · 費率會翻負(空方要付錢)；正費率比例越高的標的，carry 越穩。")
 
 
+def timing(symbol=None, thr_ann=10.0, lag=1):
+    """擇時回測:只在『前一期觀察到的』費率年化 > 門檻時才持有那期收費率，其餘空手。
+    檢驗核心論點『要擇時才有意義』—— 擇時後扣費年化真的比全程持有好嗎？
+    用 lag 期前的費率當訊號(避免偷看未來:你觀察到上期費率才決定下期進不進)。"""
+    hist = _load_hist()
+    if hist.empty:
+        print("尚無資料，請先 backfill。")
+        return
+    syms = [_perp(symbol)] if symbol else sorted(hist["symbol"].unique())
+    thr = thr_ann / 100 / PERIODS_YEAR                 # 年化門檻 → 每期費率門檻
+
+    print("=" * 82)
+    print(f"   擇時 Carry 回測 (只在前{lag}期費率年化 > {thr_ann:.0f}% 時持有；訊號無偷看未來)")
+    print("=" * 82)
+    print(f"{'標的':<16}{'在場%':>7}{'持有年化':>10}{'擇時淨年化':>11}"
+          f"{'全程淨年化':>11}{'贏過持有':>10}")
+    print("-" * 82)
+
+    rows_out = []
+    for p in syms:
+        d = hist[hist["symbol"] == p].sort_values("ts").reset_index(drop=True)
+        n = len(d)
+        if n < lag + 2:
+            continue
+        rate = d["funding_rate"].to_numpy()
+        signal = rate[:-lag] > thr                      # 前 lag 期費率 > 門檻
+        held = rate[lag:][signal]                       # 訊號成立時，收當期費率
+        span_days = (d["ts"].iloc[-1] - d["ts"].iloc[0]) / 1000 / 86400
+        span_years = span_days / 365 if span_days > 0 else 1e-9
+        deploy_pct = signal.mean() * 100                # 在場時間比例
+        # 每次進出算一次費用；連續在場算一段(用訊號由關→開的次數估進場次數)
+        entries = int(((~signal[:-1]) & signal[1:]).sum()) + int(signal[0])
+        fee_total = entries * FEE_ROUNDTRIP_PCT
+        timed_net_ann = (held.sum() - fee_total) / span_years * 100
+        held_ann = (held.sum() / span_years * 100) if len(held) else 0.0
+        hold_all_net = (rate[lag:].sum() - FEE_ROUNDTRIP_PCT) / span_years * 100
+        edge = timed_net_ann - hold_all_net
+        rows_out.append((p, deploy_pct, held_ann, timed_net_ann, hold_all_net, edge))
+        print(f"{p:<16}{deploy_pct:>7.0f}{held_ann:>+10.1f}{timed_net_ann:>+11.1f}"
+              f"{hold_all_net:>+11.1f}{edge:>+10.1f}")
+
+    print("-" * 82)
+    if rows_out:
+        avg_timed = sum(r[3] for r in rows_out) / len(rows_out)
+        avg_hold = sum(r[4] for r in rows_out) / len(rows_out)
+        n_beat = sum(1 for r in rows_out if r[5] > 0)
+        print(f"整籃子平均：擇時淨年化 {avg_timed:+.1f}%  vs  全程 {avg_hold:+.1f}%  "
+              f"→ 擇時贏過持有的標的 {n_beat}/{len(rows_out)}")
+    print("=" * 82)
+    print("★ 誠實提醒：")
+    print(f"  · 訊號用 lag={lag} 期前費率,無偷看未來;門檻是啟發式,可 --threshold 調。")
+    print("  · 若『擇時』沒明顯贏過『全程持有』,代表這段期間費率沒有可利用的持續性,")
+    print("    edge 只在真正狂熱期出現 → 印證 funding_regime『平常空手、狂熱才部署』。")
+    print("  · 仍未計基差變動/現貨成本/借貸/強平;在場%越低代表大多時間該空手等。")
+
+
 def main():
     ap = argparse.ArgumentParser(description="資金費歷史紀錄 + Carry 回測")
-    ap.add_argument("mode", choices=["backfill", "log", "carry"])
+    ap.add_argument("mode", choices=["backfill", "log", "carry", "timing"])
     ap.add_argument("--symbols", nargs="*", default=None, help="標的清單(預設一籃子)")
-    ap.add_argument("--symbol", default=None, help="carry 模式:只看單一標的")
+    ap.add_argument("--symbol", default=None, help="carry/timing 模式:只看單一標的")
     ap.add_argument("--limit", type=int, default=1000, help="backfill 每幣抓幾期(上限交易所定)")
+    ap.add_argument("--threshold", type=float, default=10.0, help="timing:進場的年化費率門檻%")
+    ap.add_argument("--lag", type=int, default=1, help="timing:用幾期前的費率當訊號(避免偷看未來)")
     args = ap.parse_args()
 
     if args.mode == "carry":
         carry(args.symbol)
+        return
+    if args.mode == "timing":
+        timing(args.symbol, args.threshold, args.lag)
         return
 
     ex = make_exchange()

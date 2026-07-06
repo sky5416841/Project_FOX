@@ -46,17 +46,32 @@ CLOSED_CSV   = "po3_paper_closed.csv"
 
 
 # ---------------------------------------------------------------- 帳本
-def load_state() -> dict:
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, encoding="utf-8") as f:
-            return json.load(f)
+def _default_state() -> dict:
     return {"equity": START_EQUITY, "open": [], "closed_count": 0,
             "realized_pnl": 0.0, "fees_paid": 0.0}
 
 
+def load_state() -> dict:
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError) as e:
+            # 壞檔(多半是舊版非原子寫入被硬 kill 留下的半截 JSON)→ 不崩潰、落回預設,
+            # 避免看門狗無限重啟崩潰迴圈。原子寫入上線後理論上不會再發生。
+            print(f"  [WARN] 狀態檔毀損({e}) → 從預設帳本重啟")
+    return _default_state()
+
+
 def save_state(s: dict) -> None:
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
+    # 原子寫入:先寫 .tmp + fsync,再 os.replace 換上去(POSIX/Windows 皆原子)。
+    # 硬 kill 只會留下「舊的完整檔」或「新的完整檔」,絕不留半截檔造成帳本歸零。
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(s, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, STATE_FILE)
 
 
 def append_closed(row: dict) -> None:

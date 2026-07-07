@@ -2803,12 +2803,18 @@ with _tab8:
         _cA, _cB = st.columns(2)
         with _cA:
             st.markdown("##### 🩸 抄底候選（深超賣）")
-            st.dataframe(_pd.DataFrame(_ex_r["dips"]) if _ex_r["dips"] else _pd.DataFrame(),
-                         width="stretch", hide_index=True) if _ex_r["dips"] else st.caption("目前沒有極端 — 別硬找")
+            if _ex_r["dips"]:
+                st.dataframe(_pd.DataFrame(_ex_r["dips"]),
+                             width="stretch", hide_index=True)
+            else:
+                st.caption("目前沒有極端 — 別硬找")
         with _cB:
             st.markdown("##### 🚀 逃頂候選（深超買）")
-            st.dataframe(_pd.DataFrame(_ex_r["tops"]) if _ex_r["tops"] else _pd.DataFrame(),
-                         width="stretch", hide_index=True) if _ex_r["tops"] else st.caption("目前沒有極端 — 別硬找")
+            if _ex_r["tops"]:
+                st.dataframe(_pd.DataFrame(_ex_r["tops"]),
+                             width="stretch", hide_index=True)
+            else:
+                st.caption("目前沒有極端 — 別硬找")
     else:
         st.info("按「掃描極端」找現在的抄底/逃頂候選。沒有極端時它會誠實說沒有 — 那也是紀律。")
 

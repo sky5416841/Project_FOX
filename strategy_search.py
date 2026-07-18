@@ -172,13 +172,80 @@ def run(symbol, tf, bars, allow_short):
     print("  · 若整排都❌退化 = 這批簡單策略在這市場沒有可靠 edge(最可能的誠實結論)。")
 
 
+GEN_BY_NAME = {name: gen for name, (gen, _) in FAMILIES.items()}
+ROBUST_BASKET = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+                 "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT",
+                 "DOT/USDT", "TRX/USDT"]
+
+
+def _parse_strat(spec):
+    """把 '動量:look=5' 解析成 (族群名, {參數}). 參數值都當 int。"""
+    fam, _, prm = spec.partition(":")
+    fam = fam.strip()
+    if fam not in GEN_BY_NAME:
+        raise SystemExit(f"未知族群 '{fam}'，可用:{list(GEN_BY_NAME)}")
+    params = {}
+    for kv in prm.split(","):
+        if "=" in kv:
+            k, v = kv.split("=")
+            params[k.strip()] = int(v)
+    return fam, params
+
+
+def robust(spec, tf, bars, allow_short, folds=4):
+    """穩健性交叉驗證:把一個『固定策略』丟到整籃子市場 × 多個時段(fold),
+    看它在多少比例的『市場×時段』仍為正。真 edge→到處活;運氣→約一半(擲銅板)。"""
+    fam, params = _parse_strat(spec)
+    gen = GEN_BY_NAME[fam]
+    ex = ccxt.binance({"options": {"defaultType": "future"}, "enableRateLimit": True})
+    print("=" * 84)
+    print(f"  穩健性交叉驗證   策略={fam} {params}   {tf}   {len(ROBUST_BASKET)}市場 × {folds}時段")
+    print(f"  真 edge → 幾乎到處為正;運氣/過擬合 → 命中率約 50%(擲銅板)")
+    print("=" * 84)
+    print(f"{'市場':<12}" + "".join(f"{'段'+str(i+1):>9}" for i in range(folds)) + f"{'正比例':>9}")
+    print("-" * 84)
+    cells_pos = cells_tot = 0
+    for sym in ROBUST_BASKET:
+        try:
+            df = fetch(ex, sym, tf, bars)
+        except Exception as e:
+            print(f"{sym:<12} 抓資料失敗 {e}")
+            continue
+        m = len(df) // folds
+        line, pos_here = f"{sym:<12}", 0
+        for i in range(folds):
+            seg = df.iloc[i*m:(i+1)*m].reset_index(drop=True)
+            _, ret, _ = backtest(seg, gen(seg, **params), tf, allow_short)
+            cells_tot += 1
+            if ret > 0:
+                cells_pos += 1; pos_here += 1
+            line += f"{ret:>+8.1f}%" if abs(ret) < 1000 else f"{ret:>+8.0f}%"
+        line += f"{pos_here/folds*100:>8.0f}%"
+        print(line)
+    print("-" * 84)
+    rate = cells_pos / cells_tot * 100 if cells_tot else 0
+    print(f"  總命中率(正報酬的市場×時段格子)= {cells_pos}/{cells_tot} = {rate:.0f}%")
+    verdict = ("≈50% → 擲銅板,沒有 edge(那個『survivor』是運氣)" if 40 <= rate <= 60
+               else "明顯 >60% → 值得再深究(但仍要換時框/加更長歷史確認)" if rate > 60
+               else "明顯 <40% → 這策略在此市場群是負的")
+    print(f"  判定:{verdict}")
+    print("=" * 84)
+
+
 def main():
     ap = argparse.ArgumentParser(description="策略搜尋實驗室(訓練/測試分段,防過擬合)")
     ap.add_argument("--symbols", nargs="*", default=["BTC/USDT", "ETH/USDT"])
     ap.add_argument("--tf", default="4h")
     ap.add_argument("--bars", type=int, default=1500)
     ap.add_argument("--short", action="store_true", help="允許做空(預設只做多/空手)")
+    ap.add_argument("--robust", default=None,
+                    help="穩健性交叉驗證單一策略,如 --robust '動量:look=5'")
+    ap.add_argument("--folds", type=int, default=4, help="穩健性:每市場切幾個時段")
     args = ap.parse_args()
+
+    if args.robust:
+        robust(args.robust, args.tf, args.bars, args.short, args.folds)
+        return
     for sym in args.symbols:
         run(sym, args.tf, args.bars, args.short)
         print()

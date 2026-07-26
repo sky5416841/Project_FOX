@@ -68,3 +68,6 @@ funding_history.csv
 
 # 紀律日誌(個人交易紀錄,不進版控)
 discipline_journal.csv
+# 手動模擬倉帳本(個人紀錄)
+paper_manual_state.json
+paper_manual_closed.csv

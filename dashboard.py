@@ -2985,9 +2985,15 @@ with _tab10:
                 else:
                     _rr = _r["rr"]
                     _okR3 = _r["stop_first"]
+                    _side_ok = _r["sl_ok"] and _r["tp_ok"]
                     _msg = (f"進場 {_entry:g}｜部位 {_r['qty']:.4f} 顆（名目 ${_r['notional']:,.0f}）｜"
                             f"打到停損虧 ${_r['risk_amt']:.2f}｜爆倉 {_rs._price(_r['liq'])}｜賺賠比 {_rr:.2f}")
-                    if not _okR3:
+                    if not _side_ok:
+                        _want = ("停損要在進場之上、停利在進場之下" if _sd == "short"
+                                 else "停損要在進場之下、停利在進場之上")
+                        st.error(f"🚫 停損/停利放錯邊！{_sd.upper()} 應該 {_want}。"
+                                 f"（現在停損 {_sl:g}、停利 {_tp:g}、進場 {_entry:g}）未開倉。")
+                    elif not _okR3:
                         st.error(f"🚫 R3 不過：爆倉({_r['liq_dist']*100:.1f}%)比停損({_r['stop_dist']*100:.1f}%)近，"
                                  f"急殺會直接爆倉。降槓桿（此停損最高安全 {_r['max_safe_lev']:.1f}x）。未開倉。\n\n{_msg}")
                     else:

@@ -41,9 +41,16 @@ def compute(account, risk_pct, side, entry, stop, tp, leverage):
         stop_first = stop < liq
     max_safe_lev = 1 / (stop_dist * SHOCK_MULT + MAINT)
     rr = (abs(tp - entry) / abs(entry - stop)) if tp else None
+    # 停損/停利有沒有放對邊:做多→停損在下、停利在上;做空→停損在上、停利在下
+    if side == "long":
+        sl_ok = stop < entry
+        tp_ok = (tp > entry) if tp else True
+    else:
+        sl_ok = stop > entry
+        tp_ok = (tp < entry) if tp else True
     return dict(stop_dist=stop_dist, risk_amt=risk_amt, notional=notional, qty=qty,
                 margin=margin, liq=liq, liq_dist=liq_dist, stop_first=stop_first,
-                max_safe_lev=max_safe_lev, rr=rr)
+                max_safe_lev=max_safe_lev, rr=rr, sl_ok=sl_ok, tp_ok=tp_ok)
 
 
 def _price(x):
@@ -72,6 +79,11 @@ def report(account, risk_pct, side, entry, stop, tp, leverage, r):
 
     # ── 逐條護欄 ────────────────────────────────────────────
     checks = []
+    # R1 停損/停利放對邊(做空停損要在進場之上、停利之下)
+    side_ok = r["sl_ok"] and r["tp_ok"]
+    if not side_ok:
+        want = "停損在進場之上、停利在進場之下" if side == "short" else "停損在進場之下、停利在進場之上"
+        checks.append(("R1", False, f"停損/停利放錯邊！{side.upper()} 應該 {want}"))
     # R2 風險 ≤ 上限
     ok2 = risk_pct <= RISK_CAP
     checks.append(("R2", ok2, f"單筆風險 {risk_pct:.1f}% "
@@ -97,7 +109,9 @@ def report(account, risk_pct, side, entry, stop, tp, leverage, r):
     print("-" * 62)
 
     fails = [rid for rid, ok, _ in checks if ok is False]
-    if "R3" in fails:
+    if "R1" in fails:
+        print("  🚫 判定：不要進！停損/停利放錯邊，這筆方向邏輯是壞的。")
+    elif "R3" in fails:
         print("  🚫 判定：不要進！停損擋不住爆倉，這筆是在賭一根不插針。")
     elif fails:
         print(f"  ⚠️ 判定：可進但有破口（{', '.join(fails)}）— 先修好再進，別將就。")

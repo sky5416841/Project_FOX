@@ -2267,8 +2267,8 @@ def frag_funding_radar() -> None:
 # 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
 # 無論使用者停在哪個 Tab，session_state 寫入與資料更新均持續進行。
 # ═════════════════════════════════════════════════════════════════════════════
-_tab1, _tab2, _tab3, _tab4, _tab5, _tab6, _tab7, _tab8, _tab9 = st.tabs(
-    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室", "🩺 市場體檢", "🎯 SMC 教練", "🩸 抄底逃頂", "🧘 紀律日誌"])
+_tab1, _tab2, _tab3, _tab4, _tab5, _tab6, _tab7, _tab8, _tab9, _tab10 = st.tabs(
+    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室", "🩺 市場體檢", "🎯 SMC 教練", "🩸 抄底逃頂", "🧘 紀律日誌", "🎮 手動模擬倉"])
 
 # ── Tab 1：戰術指揮大廳 ────────────────────────────────────────────────────
 with _tab1:
@@ -2904,6 +2904,117 @@ with _tab9:
         st.markdown("##### 📜 近期紀錄")
         _show = _jdf.tail(15).iloc[::-1][["datetime", "setup", "score", "pnl", "note"]]
         st.dataframe(_show, width="stretch", hide_index=True)
+
+
+# ── Tab 10：手動模擬倉 ─────────────────────────────────────────────────────
+with _tab10:
+    import paper_manual as _pm
+    import risk_sizer as _rs
+    st.markdown("#### 🎮 手動模擬倉 &nbsp;"
+                "<span style='font-size:0.78rem;color:#5B7494;font-weight:400'>"
+                "你手動下單 · 幣安即時真價 · 含爆倉 · 串進場護欄</span>",
+                unsafe_allow_html=True)
+    st.caption("這是你手動練紀律的場子（跟 PO3/SMC 自動交易員不同）。開倉先過護欄；"
+               "開倉後別亂動（R5 不移停損、R6 不加碼）；平倉後去『🧘 紀律日誌』記一筆。⚠ 紙上錢、非投資建議。")
+
+    _pstate = _pm.load_state()
+    try:
+        _pex = engine_core.make_exchange()
+        _auto = _pm.settle(_pstate, _pex, verbose=False)   # 自動結算已觸發停損/停利/爆倉
+        _pm.save_state(_pstate)
+        for _c in _auto:
+            st.warning(f"⚡ #{_c['id']} {_c['symbol']} {_c['reason']} 自動平倉 → "
+                       f"{_c['net_pnl']:+.2f}（{_c['R']:+.2f}R）。記得去紀律日誌記一筆。")
+    except Exception as _e:
+        _pex = None
+        st.error(f"抓幣安即時價失敗：{_e}")
+
+    _eq = _pstate["equity"]
+    _q1, _q2, _q3, _q4 = st.columns(4)
+    _q1.metric("模擬倉權益", f"${_eq:,.2f}", f"{_eq - _pm.START_EQUITY:+,.2f}")
+    _q2.metric("累計淨損益", f"{_pstate['realized_pnl']:+,.2f}")
+    _q3.metric("已平倉", f"{_pstate['closed_count']}")
+    _q4.metric("持倉中", f"{len(_pstate['open'])}")
+
+    # ── 當前持倉（即時浮盈 + 平倉鈕）────────────────────────────
+    st.markdown("##### 📌 當前持倉")
+    if _pstate["open"] and _pex is not None:
+        for _p in _pstate["open"]:
+            try:
+                _px = _pm.live_price(_pex, _p["symbol"])
+            except Exception:
+                _px = _p["entry"]
+            _d = 1 if _p["side"] == "long" else -1
+            _upnl = (_px - _p["entry"]) * _p["qty"] * _d
+            _to_sl = (_px - _p["sl"]) / _px * 100 * _d
+            _to_tp = (_p["tp"] - _px) / _px * 100 * _d
+            _ca, _cb = st.columns([5, 1])
+            _ca.markdown(
+                f"**#{_p['id']} {_p['symbol']} {_p['side'].upper()} {_p['leverage']:g}x** ｜ "
+                f"進場 {_p['entry']:g} → 現價 **{_px:g}** ｜ 浮盈 **{_upnl:+.2f}** ｜ "
+                f"距停損 {_to_sl:+.1f}% ｜ 距停利 {_to_tp:+.1f}% ｜ 爆倉 {_p['liq']:g}")
+            if _cb.button("平倉", key=f"pm_close_{_p['id']}"):
+                _pm.close_manual(_pstate, _pex, _p["id"])
+                st.rerun()
+    elif not _pstate["open"]:
+        st.caption("目前無持倉。用下方表單開一筆（記得先想好停損停利）。")
+
+    # ── 開倉（表單 + 護欄硬擋 R3）──────────────────────────────
+    st.markdown("##### ➕ 開一筆（會先過護欄；停損擋不住爆倉會被拒絕）")
+    with st.form("pm_open_form"):
+        _fa, _fb, _fc, _fd = st.columns(4)
+        _sym = _fa.text_input("市場", value="BTC/USDT")
+        _sd = _fb.selectbox("方向", ["long", "short"])
+        _lev = _fc.number_input("槓桿", min_value=1.0, max_value=125.0, value=10.0, step=1.0)
+        _rk = _fd.number_input("風險%", min_value=0.1, max_value=5.0, value=1.0, step=0.5)
+        _fe, _ff = st.columns(2)
+        _sl = _fe.number_input("停損價", min_value=0.0, value=0.0, format="%.6f")
+        _tp = _ff.number_input("停利價", min_value=0.0, value=0.0, format="%.6f")
+        _go = st.form_submit_button("跑護欄並開倉")
+    if _go:
+        if _pex is None:
+            st.error("沒有行情連線，無法開倉。")
+        elif _sl <= 0 or _tp <= 0:
+            st.error("請填停損價和停利價（練紀律的第一條就是進場前定好出場）。")
+        else:
+            try:
+                _entry = _pm.live_price(_pex, _pm._norm(_sym))
+                _r = _rs.compute(_eq, _rk, _sd, _entry, _sl, _tp, _lev)
+                if _r is None:
+                    st.error("停損距離為 0，無法計算。")
+                else:
+                    _rr = _r["rr"]
+                    _okR3 = _r["stop_first"]
+                    _msg = (f"進場 {_entry:g}｜部位 {_r['qty']:.4f} 顆（名目 ${_r['notional']:,.0f}）｜"
+                            f"打到停損虧 ${_r['risk_amt']:.2f}｜爆倉 {_rs._price(_r['liq'])}｜賺賠比 {_rr:.2f}")
+                    if not _okR3:
+                        st.error(f"🚫 R3 不過：爆倉({_r['liq_dist']*100:.1f}%)比停損({_r['stop_dist']*100:.1f}%)近，"
+                                 f"急殺會直接爆倉。降槓桿（此停損最高安全 {_r['max_safe_lev']:.1f}x）。未開倉。\n\n{_msg}")
+                    else:
+                        _pm.add_position(_pstate, _sym, _sd, _entry, _lev, _sl, _tp, _r)
+                        if _rk > _rs.RISK_CAP:
+                            st.warning(f"⚠ R2：風險 {_rk:.1f}% 超過 2%，偏大。已開倉但下次收斂。\n\n{_msg}")
+                        elif _rr < _rs.RR_MIN:
+                            st.warning(f"⚠ R4：賺賠比 {_rr:.2f} < 1.5，賺太少。已開倉但這種單長期不划算。\n\n{_msg}")
+                        else:
+                            st.success(f"✅ 三道護欄都過，已開倉。進場後別亂動，交給紀律。\n\n{_msg}")
+                        st.rerun()
+            except Exception as _e:
+                st.error(f"開倉失敗：{_e}")
+
+    # ── 歷史 ───────────────────────────────────────────────
+    _pm_closed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_manual_closed.csv")
+    if os.path.exists(_pm_closed):
+        try:
+            _hdf = pd.read_csv(_pm_closed)
+            _hn = len(_hdf); _hw = int((_hdf["net_pnl"] > 0).sum())
+            st.markdown(f"##### 📜 已平倉 {_hn} 筆 ｜ 勝率 {_hw/_hn*100:.0f}% ｜ "
+                        f"累計 {_hdf['net_pnl'].sum():+.2f} ｜ 平均 {_hdf['R'].mean():+.2f}R")
+            st.dataframe(_hdf.tail(15).iloc[::-1][
+                ["closed_at", "symbol", "side", "entry", "exit", "reason", "net_pnl", "R"]],
+                width="stretch", hide_index=True)
+        except Exception:
+            pass
 
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────

@@ -138,26 +138,31 @@ def settle(state, ex, verbose=True):
 
 
 # ----------------------------------------------------------------- 開倉
+def add_position(state, symbol, side, entry, leverage, sl, tp, r):
+    """把一筆已算好護欄(r)的部位加進帳本(不印字、不抓價),CLI 與網頁共用。"""
+    open_fee = r["notional"] * FEE
+    pos = {"id": state["next_id"], "symbol": _norm(symbol), "side": side,
+           "entry": round(entry, 6), "qty": round(r["qty"], 8),
+           "notional": round(r["notional"], 2), "leverage": leverage,
+           "sl": round(sl, 6), "tp": round(tp, 6), "liq": round(r["liq"], 6),
+           "risk_amt": round(r["risk_amt"], 2), "open_fee": round(open_fee, 6),
+           "opened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    state["next_id"] += 1
+    state["open"].append(pos)
+    save_state(state)
+    return pos
+
+
 def open_position(state, ex, symbol, side, leverage, sl, tp, risk_pct=1.0):
     symbol = _norm(symbol)
     entry = live_price(ex, symbol)
     r = rs.compute(state["equity"], risk_pct, side, entry, sl, tp, leverage)
     if r is None:
         print("停損距離為 0，無法開倉。"); return None
-    open_fee = r["notional"] * FEE
-    pos = {"id": state["next_id"], "symbol": symbol, "side": side,
-           "entry": round(entry, 6), "qty": round(r["qty"], 8),
-           "notional": round(r["notional"], 2), "leverage": leverage,
-           "sl": round(sl, 6), "tp": round(tp, 6), "liq": round(r["liq"], 6),
-           "risk_amt": round(r["risk_amt"], 2), "open_fee": round(open_fee, 6),
-           "opened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-    # 護欄提示(不擋,練習用,但把破口講清楚)
-    rs.report(state["equity"], risk_pct, side, entry, sl, tp, leverage, r)
-    state["next_id"] += 1
-    state["open"].append(pos)
-    save_state(state)
+    rs.report(state["equity"], risk_pct, side, entry, sl, tp, leverage, r)  # 護欄提示
+    pos = add_position(state, symbol, side, entry, leverage, sl, tp, r)
     print(f"  ✅ 已開倉 #{pos['id']} {symbol} {side} @ {entry:g}"
-          f"（名目 ${r['notional']:.0f}，開倉費 ${open_fee:.2f} 於平倉時計入）")
+          f"（名目 ${r['notional']:.0f}，開倉費 ${pos['open_fee']:.2f} 於平倉時計入）")
     return pos
 
 

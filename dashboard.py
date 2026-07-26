@@ -2267,8 +2267,8 @@ def frag_funding_radar() -> None:
 # 各 Fragment 的 run_every 計時器在伺服器端獨立運行，
 # 無論使用者停在哪個 Tab，session_state 寫入與資料更新均持續進行。
 # ═════════════════════════════════════════════════════════════════════════════
-_tab1, _tab2, _tab3, _tab4, _tab5, _tab6, _tab7, _tab8 = st.tabs(
-    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室", "🩺 市場體檢", "🎯 SMC 教練", "🩸 抄底逃頂"])
+_tab1, _tab2, _tab3, _tab4, _tab5, _tab6, _tab7, _tab8, _tab9 = st.tabs(
+    ["🌐 戰術指揮大廳", "📡 天眼雷達", "💼 持倉與結算", "🤖 AI 副駕", "🦊 PO3 觀測室", "🩺 市場體檢", "🎯 SMC 教練", "🩸 抄底逃頂", "🧘 紀律日誌"])
 
 # ── Tab 1：戰術指揮大廳 ────────────────────────────────────────────────────
 with _tab1:
@@ -2817,6 +2817,93 @@ with _tab8:
                 st.caption("目前沒有極端 — 別硬找")
     else:
         st.info("按「掃描極端」找現在的抄底/逃頂候選。沒有極端時它會誠實說沒有 — 那也是紀律。")
+
+
+# ── Tab 9：紀律日誌 ────────────────────────────────────────────────────────
+with _tab9:
+    import discipline_journal as _dj
+    st.markdown("#### 🧘 交易紀律日誌 &nbsp;"
+                "<span style='font-size:0.78rem;color:#5B7494;font-weight:400'>"
+                "計分板是『行為』不是『損益』 · 合約槓桿版</span>",
+                unsafe_allow_html=True)
+    st.caption("守規矩小虧 = 成功的一天；破戒賺錢 = 失敗的一天（那是運氣，遲早害死你）。"
+               "核心指標 = 連續守規矩 streak，因為『只要破一條就可能歸零』。詳見 DISCIPLINE_SYSTEM.md。")
+
+    _dj_csv = os.path.join(os.path.dirname(os.path.abspath(__file__)), "discipline_journal.csv")
+    _cols = ["datetime", "setup"] + _dj.RULE_IDS + ["score", "pnl", "note"]
+    if os.path.exists(_dj_csv):
+        try:
+            _jdf = pd.read_csv(_dj_csv)
+        except Exception:
+            _jdf = pd.DataFrame(columns=_cols)
+    else:
+        _jdf = pd.DataFrame(columns=_cols)
+
+    # ── 成長儀表 ──────────────────────────────────────────────
+    if len(_jdf):
+        _sc = pd.to_numeric(_jdf["score"], errors="coerce").fillna(0)
+        _streak = _dj._clean_streak(_sc)
+        _clean = int((_sc == 100).sum())
+        _m1, _m2, _m3, _m4 = st.columns(4)
+        _m1.metric("平均紀律分", f"{_sc.mean():.0f}")
+        _m2.metric("🔥 連續守規矩", f"{_streak}", "階段1畢業=20")
+        _m3.metric("乾淨筆數", f"{_clean}/{len(_jdf)}", f"{_clean/len(_jdf)*100:.0f}%")
+        _m4.metric("總筆數", f"{len(_jdf)}")
+        st.progress(min(_streak / 20, 1.0))
+        if _streak >= 20:
+            st.success("🎉 連續 20 筆乾淨！紀律肌肉建立起來了，可進下一階（加壓測試）。")
+    else:
+        st.info("還沒有紀錄。用下方表單記第一筆（在模擬倉），開始累積你的紀律 streak。")
+
+    # ── 記一筆（表單）────────────────────────────────────────────
+    st.markdown("##### ✍️ 記一筆交易（勾選=有守住該條）")
+    with st.form("disc_log_form", clear_on_submit=True):
+        _setup = st.text_input("setup 名稱", placeholder="例：回踩支撐做多")
+        _checks = {}
+        _cc = st.columns(2)
+        for _i, (_rid, _desc) in enumerate(_dj.RULES):
+            with _cc[_i % 2]:
+                _checks[_rid] = st.checkbox(f"[{_rid}] {_desc}", value=True, key=f"dj_{_rid}")
+        _pnl = st.text_input("這筆損益（R 或 USDT，只記錄、不算分，可留空）", placeholder="例：-1 或 +2.5")
+        _note = st.text_input("備註（破了哪條、當下情緒…）")
+        _submit = st.form_submit_button("記錄這筆")
+    if _submit:
+        _followed = sum(1 for _v in _checks.values() if _v)
+        _score = round(_followed / len(_dj.RULES) * 100)
+        try:
+            _pnlv = float(_pnl) if _pnl.strip() else ""
+        except ValueError:
+            _pnlv = ""
+        _row = {"datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "setup": _setup.strip() or "(未命名)",
+                **{_rid: (1 if _checks[_rid] else 0) for _rid in _dj.RULE_IDS},
+                "score": _score, "pnl": _pnlv, "note": _note.strip()}
+        _new = pd.concat([_jdf, pd.DataFrame([_row])], ignore_index=True) if len(_jdf) \
+            else pd.DataFrame([_row])
+        _tmp = _dj_csv + ".tmp"
+        _new.to_csv(_tmp, index=False, encoding="utf-8-sig")
+        os.replace(_tmp, _dj_csv)
+        _broke = [_rid for _rid in _dj.RULE_IDS if not _checks[_rid]]
+        if _score == 100:
+            st.success("✅ 紀律分 100 — 乾淨的一筆！不管賺賠，這筆你做對了。")
+        else:
+            st.warning(f"紀律分 {_score} — 破了 {', '.join(_broke)}。這才是這筆真正的問題，不是損益。")
+        st.rerun()
+
+    # ── 罩門 + 近期紀錄 ───────────────────────────────────────────
+    if len(_jdf):
+        st.markdown("##### 🎯 你的破戒罩門（數字大＝專練這條）")
+        _brk = []
+        for _rid, _desc in _dj.RULES:
+            _col = pd.to_numeric(_jdf[_rid], errors="coerce")
+            _brk.append({"規則": _rid, "說明": _desc,
+                         "破戒次數": int((_col == 0).sum())})
+        _bdf = pd.DataFrame(_brk).sort_values("破戒次數", ascending=False)
+        st.dataframe(_bdf, width="stretch", hide_index=True)
+
+        st.markdown("##### 📜 近期紀錄")
+        _show = _jdf.tail(15).iloc[::-1][["datetime", "setup", "score", "pnl", "note"]]
+        st.dataframe(_show, width="stretch", hide_index=True)
 
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────

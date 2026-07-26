@@ -65,3 +65,6 @@ smc_paper_trader.log
 
 # 資金費歷史(backfill 抓的公開資料，跟 ml 特徵一樣不進版控)
 funding_history.csv
+
+# 紀律日誌(個人交易紀錄,不進版控)
+discipline_journal.csv

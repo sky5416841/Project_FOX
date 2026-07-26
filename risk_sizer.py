@@ -1,71 +1,153 @@
 """
-risk_sizer.py — 部位大小 + 槓桿保命計算機
+risk_sizer.py — 進場護欄 + 部位/槓桿保命計算機
+================================================
+AI 在紀律上唯一該扮演的角色:**護欄**(強制你守 R2/R3/R4),不是代替你交易。
+進場前跑一次,輸入進場/停損/停利/想開幾倍,它即時:
+  · 算該開多大部位(讓「打到停損」剛好只虧設定風險%)      → 顧 R2
+  · 算爆倉價,檢查『停損會不會先於爆倉觸發』               → 顧 R3(合約第一殺手)
+  · 算賺賠比,檢查 ≥ 1.5                                    → 顧 R4
+  · 最後給 GO / 不要進 的判定 + 這個停損下的最高安全槓桿
 
-輸入帳戶、單筆風險%、進場價、停損價、槓桿，輸出：
-  · 該開多大部位（讓「打到停損」剛好只虧設定的風險%）
-  · 爆倉價，以及最致命的檢查：『停損會先觸發，還是爆倉先到？』
-  · 在這個停損下，最高能用幾倍槓桿才安全
-  · 虧損不對稱提醒
+★ 把『600U 之死(10x+暴力急殺,爆倉跑在停損前)』變成進場前就擋下的規則。
+  風控練習用,非投資建議。配 DISCIPLINE_SYSTEM.md 使用。
 
-★ 把『600U 之死(10x+暴力急殺，爆倉跑在停損前)』變成可量化的規則。
-  風控練習用，非投資建議。改最上面參數試不同情境。
+用法:
+  python risk_sizer.py            # 互動護欄(進場前跑這個)
+  python risk_sizer.py --demo     # 用內建範例參數跑一次
 """
+import argparse
 
-ACCOUNT    = 600.0      # 帳戶 (USDT)
-RISK_PCT   = 1.0        # 每筆願意虧帳戶的 %（1~2 是常見紀律）
-SIDE       = "long"     # long / short
-ENTRY      = 100.0      # 進場價
-STOP       = 97.0       # 停損價
-LEVERAGE   = 10.0       # 槓桿
-MAINT      = 0.005      # 維持保證金率(粗估)
-SHOCK_MULT = 2.0        # 「暴力插針」假設 = 停損距離的幾倍
+MAINT      = 0.005     # 維持保證金率(粗估)
+SHOCK_MULT = 2.0       # 「暴力插針」假設 = 停損距離的幾倍
+RISK_CAP   = 2.0       # 單筆風險上限%(超過就警告 R2)
+RR_MIN     = 1.5       # 賺賠比下限(R4)
+
+
+def compute(account, risk_pct, side, entry, stop, tp, leverage):
+    stop_dist = abs(entry - stop) / entry
+    if stop_dist <= 0:
+        return None
+    risk_amt = account * risk_pct / 100
+    notional = risk_amt / stop_dist
+    qty = notional / entry
+    margin = notional / leverage
+    if side == "long":
+        liq = entry * (1 - 1 / leverage + MAINT)
+        liq_dist = (entry - liq) / entry
+        stop_first = stop > liq
+    else:
+        liq = entry * (1 + 1 / leverage - MAINT)
+        liq_dist = (liq - entry) / entry
+        stop_first = stop < liq
+    max_safe_lev = 1 / (stop_dist * SHOCK_MULT + MAINT)
+    rr = (abs(tp - entry) / abs(entry - stop)) if tp else None
+    return dict(stop_dist=stop_dist, risk_amt=risk_amt, notional=notional, qty=qty,
+                margin=margin, liq=liq, liq_dist=liq_dist, stop_first=stop_first,
+                max_safe_lev=max_safe_lev, rr=rr)
+
+
+def report(account, risk_pct, side, entry, stop, tp, leverage, r):
+    print("=" * 62)
+    print(f"  進場護欄檢查（{side.upper()}）")
+    print("=" * 62)
+    print(f"  帳戶 / 單筆風險 : ${account:,.0f} / {risk_pct:.1f}% = ${r['risk_amt']:,.2f}")
+    print(f"  進場 / 停損     : {entry:g} → {stop:g}  (停損距離 {r['stop_dist']*100:.1f}%)")
+    if tp:
+        print(f"  停利            : {tp:g}")
+    print(f"  槓桿            : {leverage:g}x")
+    print("-" * 62)
+    print(f"  ➜ 建議部位      : {r['qty']:.4f} 顆（名目 ${r['notional']:,.0f}，保證金 ${r['margin']:,.0f}）")
+    print(f"    打到停損只虧   : ${r['risk_amt']:,.2f}")
+    print(f"  ➜ 爆倉價        : {r['liq']:.4g}（距進場 {r['liq_dist']*100:.1f}%）")
+    print("=" * 62)
+
+    # ── 逐條護欄 ────────────────────────────────────────────
+    checks = []
+    # R2 風險 ≤ 上限
+    ok2 = risk_pct <= RISK_CAP
+    checks.append(("R2", ok2, f"單筆風險 {risk_pct:.1f}% "
+                   + ("≤ 上限 2%，可控" if ok2 else f"> 上限 {RISK_CAP:.0f}%，太大！降風險%")))
+    # R3 停損先於爆倉(最致命)
+    ok3 = r["stop_first"]
+    checks.append(("R3", ok3, ("停損先於爆倉，插針有緩衝" if ok3
+                   else f"爆倉({r['liq_dist']*100:.1f}%)比停損({r['stop_dist']*100:.1f}%)近 → "
+                        "急殺會跳過停損直接爆倉(600U 死法)！降槓桿")))
+    # R4 賺賠比
+    if r["rr"] is not None:
+        ok4 = r["rr"] >= RR_MIN
+        checks.append(("R4", ok4, f"賺賠比 {r['rr']:.2f} "
+                       + (f"≥ {RR_MIN}，OK" if ok4 else f"< {RR_MIN}，賺太少/賠太多，別進")))
+    else:
+        checks.append(("R4", None, "沒填停利，無法檢查賺賠比（建議補上）"))
+
+    print("  護欄逐條：")
+    for rid, ok, msg in checks:
+        icon = "✅" if ok else ("🔴" if ok is False else "⚪")
+        print(f"    {icon} [{rid}] {msg}")
+    print(f"  這個停損下，最高安全槓桿 ≈ {r['max_safe_lev']:.1f}x（撐得過 {SHOCK_MULT:.0f}× 插針）")
+    print("-" * 62)
+
+    fails = [rid for rid, ok, _ in checks if ok is False]
+    if "R3" in fails:
+        print("  🚫 判定：不要進！停損擋不住爆倉，這筆是在賭一根不插針。")
+    elif fails:
+        print(f"  ⚠️ 判定：可進但有破口（{', '.join(fails)}）— 先修好再進，別將就。")
+    else:
+        print("  ✅ 判定：GO。三道護欄都過，這筆風險是可控的。剩下交給紀律：進場後別亂動。")
+    print("=" * 62)
+
+
+def _num(prompt, default=None):
+    while True:
+        raw = input(prompt).strip()
+        if not raw and default is not None:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            print("    請輸入數字")
+
+
+def guard():
+    print("進場護欄 — 進場前填一下（[]內是預設，直接 Enter 用預設）\n")
+    account = _num("帳戶 USDT [600]: ", 600.0)
+    risk_pct = _num("單筆風險 % [1]: ", 1.0)
+    side = input("方向 long/short [long]: ").strip().lower() or "long"
+    if side not in ("long", "short"):
+        side = "long"
+    entry = _num("進場價: ")
+    stop = _num("停損價: ")
+    tp_raw = input("停利價（可留空，但強烈建議填以檢查賺賠比）: ").strip()
+    try:
+        tp = float(tp_raw) if tp_raw else None
+    except ValueError:
+        tp = None
+    leverage = _num("槓桿倍數 [10]: ", 10.0)
+    print()
+    r = compute(account, risk_pct, side, entry, stop, tp, leverage)
+    if r is None:
+        print("停損距離為 0，無法計算。")
+        return
+    report(account, risk_pct, side, entry, stop, tp, leverage, r)
+
+
+def demo():
+    account, risk_pct, side, entry, stop, tp, leverage = 600.0, 1.0, "long", 100.0, 97.0, 105.0, 10.0
+    r = compute(account, risk_pct, side, entry, stop, tp, leverage)
+    report(account, risk_pct, side, entry, stop, tp, leverage, r)
 
 
 def main():
-    risk_amt = ACCOUNT * RISK_PCT / 100
-    stop_dist = abs(ENTRY - STOP) / ENTRY               # 停損距離(比例)
-    if stop_dist <= 0:
-        print("停損距離為 0，無法計算"); return
-
-    notional = risk_amt / stop_dist                     # 打到停損剛好虧 risk_amt
-    qty = notional / ENTRY
-    margin = notional / LEVERAGE
-
-    # 爆倉價（粗估）
-    if SIDE == "long":
-        liq = ENTRY * (1 - 1 / LEVERAGE + MAINT)
-        liq_dist = (ENTRY - liq) / ENTRY
-        stop_first = STOP > liq                          # 停損價在爆倉價之上 → 先觸發(好)
+    ap = argparse.ArgumentParser(description="進場護欄 + 部位/槓桿計算")
+    ap.add_argument("--demo", action="store_true", help="用內建範例參數跑一次")
+    args = ap.parse_args()
+    if args.demo:
+        demo()
     else:
-        liq = ENTRY * (1 + 1 / LEVERAGE - MAINT)
-        liq_dist = (liq - ENTRY) / ENTRY
-        stop_first = STOP < liq
-
-    max_safe_lev = 1 / (stop_dist * SHOCK_MULT + MAINT)  # 撐得過 SHOCK_MULT 倍插針的最高槓桿
-
-    print("=" * 60)
-    print(f"  部位 + 槓桿保命計算（{SIDE.upper()}）")
-    print("=" * 60)
-    print(f"  帳戶 / 單筆風險   : ${ACCOUNT:,.0f}  /  {RISK_PCT:.1f}%  = ${risk_amt:,.2f}")
-    print(f"  進場 / 停損       : ${ENTRY:.2f} → ${STOP:.2f}   (停損距離 {stop_dist*100:.1f}%)")
-    print(f"  槓桿              : {LEVERAGE:.0f}x")
-    print("-" * 60)
-    print(f"  建議部位          : {qty:.4f} 顆（名目 ${notional:,.0f}，保證金 ${margin:,.0f}）")
-    print(f"  打到停損 → 虧      : ${risk_amt:,.2f}（帳戶 {RISK_PCT:.1f}%，可控）")
-    print("-" * 60)
-    print(f"  爆倉價            : ${liq:.2f}（距進場 {liq_dist*100:.1f}%）")
-    if stop_first:
-        print(f"  ✅ 停損({stop_dist*100:.1f}%) 先於 爆倉({liq_dist*100:.1f}%) → 停損有空間工作")
-    else:
-        print(f"  🔴 危險！爆倉({liq_dist*100:.1f}%) 比 停損({stop_dist*100:.1f}%) 還近")
-        print(f"     → 暴力急殺會跳過停損直接爆倉(這就是 600U 的死法)")
-    print(f"  這個停損下，最高安全槓桿 ≈ {max_safe_lev:.1f}x"
-          f"（撐得過 {SHOCK_MULT:.0f}× 停損距離的插針）")
-    print("-" * 60)
-    dd = RISK_PCT
-    print(f"  虧損不對稱：虧 {dd:.0f}% 要賺 {dd/(1-dd/100):.1f}% 回本；"
-          f"虧 50% 要賺 100% → 絕不大賠 > 多賺")
-    print("=" * 60)
+        try:
+            guard()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消。")
 
 
 if __name__ == "__main__":

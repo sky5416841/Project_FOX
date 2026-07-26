@@ -46,19 +46,28 @@ def compute(account, risk_pct, side, entry, stop, tp, leverage):
                 max_safe_lev=max_safe_lev, rr=rr)
 
 
+def _price(x):
+    """價格自適應格式:大幣兩位小數帶千分位,小幣多給幾位,不用科學記號。"""
+    if abs(x) >= 100:
+        return f"{x:,.2f}"
+    if abs(x) >= 1:
+        return f"{x:,.4f}"
+    return f"{x:.6f}"
+
+
 def report(account, risk_pct, side, entry, stop, tp, leverage, r):
     print("=" * 62)
     print(f"  進場護欄檢查（{side.upper()}）")
     print("=" * 62)
     print(f"  帳戶 / 單筆風險 : ${account:,.0f} / {risk_pct:.1f}% = ${r['risk_amt']:,.2f}")
-    print(f"  進場 / 停損     : {entry:g} → {stop:g}  (停損距離 {r['stop_dist']*100:.1f}%)")
+    print(f"  進場 / 停損     : {_price(entry)} → {_price(stop)}  (停損距離 {r['stop_dist']*100:.1f}%)")
     if tp:
-        print(f"  停利            : {tp:g}")
+        print(f"  停利            : {_price(tp)}")
     print(f"  槓桿            : {leverage:g}x")
     print("-" * 62)
     print(f"  ➜ 建議部位      : {r['qty']:.4f} 顆（名目 ${r['notional']:,.0f}，保證金 ${r['margin']:,.0f}）")
     print(f"    打到停損只虧   : ${r['risk_amt']:,.2f}")
-    print(f"  ➜ 爆倉價        : {r['liq']:.4g}（距進場 {r['liq_dist']*100:.1f}%）")
+    print(f"  ➜ 爆倉價        : {_price(r['liq'])}（距進場 {r['liq_dist']*100:.1f}%）")
     print("=" * 62)
 
     # ── 逐條護欄 ────────────────────────────────────────────

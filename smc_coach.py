@@ -243,9 +243,19 @@ def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF, draw=True):
         "chan_txt": (chan_dir + broke) if chan_on else f"震盪盤·通道休眠 (ER {er:.2f})",
     }
     fig = render(df, events, gaps, obs, extra) if draw else None
+    # 標籤誠實反映時框共振度(只顯示,不影響 bias/收集器):
+    #   4/4 共振、3/4 偏向、2/4 平手分歧(此時「空」是 line201 的 >= 平手規則挑的,非真共振)
+    _nal = list(dirs.values()).count(bias)
+    _ntf = len(dirs)
+    if _nal == _ntf:
+        _hdr, _hc = f"{bias}向共振 {_nal}/{_ntf}｜多時框一致", "#1b5e20"
+    elif _nal > _ntf - _nal:
+        _hdr, _hc = f"偏{bias} {_nal}/{_ntf}｜主要時框同向", "#33691e"
+    else:
+        _hdr, _hc = f"時框分歧 {_nal}/{_ntf}｜非共振，觀望（bias 平手取{bias}）", "#5d4037"
     panel = {
         "rows": [
-            ("SMC 教練", f"自動：{bias}單｜同向{bias}方推進", "#1b5e20"),
+            ("SMC 教練", _hdr, _hc),
             ("方向", " ｜ ".join(f"{tf.upper()} {d}" for tf, d in dirs.items()), "#263238"),
             ("進場進度", progress, "#1b5e20" if done >= 6 else "#263238"),
             ("高週期區域", htf, "#4e342e"),

@@ -171,7 +171,7 @@ def render(df, events, gaps, obs, extra):
     return fig                                  # 純 K 線圖(面板用網頁 HTML 另畫)
 
 
-def seven_steps(df, bias, events, gaps):
+def seven_steps(df, bias, events, gaps, n_align=None, n_tf=4):
     last = df.iloc[-1]
     recent = [e for e in events if e[0] >= len(df) - 40]
     has_choch = any(e[1] == "CHoCH" and (e[2] == "↓") == (bias == "空") for e in recent)
@@ -180,8 +180,17 @@ def seven_steps(df, bias, events, gaps):
             (df["low"].iloc[-20:].idxmin() >= len(df) - 6)
     in_zone = any(g[3] == ("bear" if bias == "空" else "bull") for g in gaps)
     react = (last["close"] < last["open"]) if bias == "空" else (last["close"] > last["open"])
+    # 步驟1 文字誠實反映共振度(布林值仍固定 True→不影響 all_pass/n_pass/收集器)
+    if n_align is None:
+        _d1 = f"主方向 {bias}"
+    elif n_align == n_tf:
+        _d1 = f"{bias}向共振 {n_align}/{n_tf}"
+    elif n_align > n_tf - n_align:
+        _d1 = f"方向偏{bias} {n_align}/{n_tf}"
+    else:
+        _d1 = f"方向分歧 {n_align}/{n_tf}（平手取{bias}）"
     return [
-        ("1 方向", f"多時框{bias}向推進", True),
+        ("1 方向", _d1, True),
         ("2 區域", "進入訂單區/FVG" if in_zone else "等待進入區域", in_zone),
         ("3 掃蕩", "掃過前高/前低" if swept else "尚未掃蕩", bool(swept)),
         ("4 轉向", "MSS/CHoCH 完成" if has_choch else "等待轉向", has_choch),
@@ -203,7 +212,7 @@ def build_coach(ex=None, symbol=SYMBOL, main_tf=MAIN_TF, draw=True):
     events = structure(df)
     gaps = fvg(df)
     obs = order_blocks(df, events, bias)
-    steps = seven_steps(df, bias, events, gaps)
+    steps = seven_steps(df, bias, events, gaps, list(dirs.values()).count(bias), len(dirs))
 
     # 面板細節
     sw_hi = df["high"].iloc[-30:].max(); sw_lo = df["low"].iloc[-30:].min()

@@ -55,16 +55,24 @@ def fetch_last(symbol, tf, n):
     return df.iloc[:-1].tail(n).reset_index(drop=True)   # 丟未收完的那根
 
 
-def predict(symbol, tf):
+def classify(symbol, tf):
+    """回傳判定資料(不印字),給網頁/其他程式呼叫。"""
     df = fetch_last(symbol, tf, WINDOW)
     tmp = os.path.join(tempfile.gettempdir(), "cv_live.png")
     render(df, tmp)
     x = TF(datasets.folder.default_loader(tmp)).unsqueeze(0)
     with torch.no_grad():
         prob = F.softmax(load_model()(x), dim=1)[0]
-    idx = int(prob.argmax())
-    cls = CLASSES[idx]
-    conf = float(prob[idx])
+    probs = {c: float(prob[i]) for i, c in enumerate(CLASSES)}
+    cls = max(probs, key=probs.get)
+    return {"symbol": symbol, "tf": tf, "n": WINDOW, "probs": probs,
+            "cls": cls, "conf": probs[cls], "label_tw": TW[cls], "setup": SETUP[cls]}
+
+
+def predict(symbol, tf):
+    r = classify(symbol, tf)
+    prob = [r["probs"][c] for c in CLASSES]
+    cls, conf = r["cls"], r["conf"]
     print("=" * 58)
     print(f"  盤面辨識 {symbol} {tf}（最近 {WINDOW} 根）")
     print("=" * 58)

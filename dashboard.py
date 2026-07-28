@@ -2647,6 +2647,45 @@ with _tab6:
     )
     st.caption("把命令列的『市場狀態偵測』與『相關性陷阱』搬上網頁。按下後抓即時資料，"
                "判斷現在是趨勢還是震盪、你的幣是不是高相關（假分散）。對應 `regime_detector.py` / `correlation_check.py`。")
+
+    # ── CNN 盤面判定（環境偵測器，85% 那個模型）─────────────────────
+    st.markdown("##### 🧠 CNN 盤面判定 &nbsp;"
+                "<span style='font-size:0.74rem;color:#5B7494'>留一商品驗證 85% 的型態辨識</span>",
+                unsafe_allow_html=True)
+    st.caption("用訓練好的 CNN 判斷『現在是趨勢還是震盪』→ 幫你選對 Setup。"
+               "⚠ 這是環境偵測、不是漲跌預測，別當買賣訊號。對應 `research/cv_predict.py`。")
+    _cvc1, _cvc2, _cvc3 = st.columns([2, 1, 1])
+    _cv_sym = _cvc1.selectbox("市場", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
+                                       "XRP/USDT", "DOGE/USDT", "ADA/USDT", "AVAX/USDT"], key="cv_sym")
+    _cv_tf = _cvc2.selectbox("時框", ["1h", "4h", "15m"], key="cv_tf")
+    _cv_go = _cvc3.button("🧠 判定盤面", key="cv_btn")
+    if _cv_go:
+        with st.spinner("抓 K 線 + CNN 判定中…"):
+            try:
+                import sys as _sys
+                _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "research"))
+                import cv_predict as _cvp
+                st.session_state.cv_result = _cvp.classify(_cv_sym, _cv_tf)
+            except Exception as _e:
+                st.session_state.cv_result = {"error": str(_e)}
+    _cvr = st.session_state.get("cv_result")
+    if _cvr and "error" in _cvr:
+        st.error(f"CNN 判定失敗：{_cvr['error']}")
+    elif _cvr:
+        _twm = {"down": "📉 下降趨勢", "range": "🟰 盤整/震盪", "up": "📈 上升趨勢"}
+        for _c in ["up", "range", "down"]:
+            _p = _cvr["probs"][_c]
+            _ca, _cb = st.columns([1, 4])
+            _ca.write(_twm[_c])
+            _cb.progress(_p, text=f"{_p*100:.0f}%")
+        if _cvr["conf"] < 0.5:
+            st.warning(f"判定：{_cvr['label_tw']}（信心 {_cvr['conf']*100:.0f}%，偏低）"
+                       f"— 三類接近＝盤面不明確，這種時候最好『空手等』。")
+        else:
+            st.success(f"判定：{_cvr['label_tw']}（信心 {_cvr['conf']*100:.0f}%，{_cvr['symbol']} {_cvr['tf']}）")
+        st.info(f"→ 建議 setup：{_cvr['setup']}")
+    st.divider()
+
     if st.button("🩺 執行市場體檢", key="health_btn"):
         with st.spinner("抓取市場資料分析中…"):
             try:

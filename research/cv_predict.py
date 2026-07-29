@@ -62,6 +62,8 @@ def render_readable(df, cls=None):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from io import BytesIO
+    plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "Microsoft YaHei", "SimHei", "DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
     d = df.reset_index(drop=True)
     n = len(d)
     fig, ax = plt.subplots(figsize=(9.5, 4.2), dpi=110)

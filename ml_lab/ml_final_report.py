@@ -29,14 +29,34 @@ from sklearn.metrics import (accuracy_score, precision_score, recall_score,
 from sklearn.calibration import calibration_curve
 from sklearn.model_selection import learning_curve
 
+import argparse
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.path.join(HERE, "live_ml_features.csv")
-FEATS = ["side_bear", "box_range_pct", "box_len", "bars_since_box", "wick_atr",
-         "pierce_atr", "body_atr", "atr_pct", "vol_surge", "ret_5", "ret_20",
-         "delta", "cvd_slope", "obi_ratio"]
+
+# 兩個資料集共用同一套流水線;差別只在 csv + 特徵欄
+DATASETS = {
+    "po3": {
+        "csv": "live_ml_features.csv", "name": "PO3(掃針+訂單流)",
+        "feats": ["side_bear", "box_range_pct", "box_len", "bars_since_box", "wick_atr",
+                  "pierce_atr", "body_atr", "atr_pct", "vol_surge", "ret_5", "ret_20",
+                  "delta", "cvd_slope", "obi_ratio"],
+    },
+    "smc": {
+        "csv": "smc_ml_features.csv", "name": "SMC(多時框結構)",
+        "feats": ["n_struct", "n_fvg", "n_ob", "n_align", "er"],
+    },
+}
 
 
 def main():
+    ap = argparse.ArgumentParser(description="收尾 ML 完整流水線(PO3/SMC 通用)")
+    ap.add_argument("dataset", nargs="?", default="po3", choices=list(DATASETS))
+    args = ap.parse_args()
+    cfg = DATASETS[args.dataset]
+    DATA = os.path.join(HERE, cfg["csv"])
+    FEATS = cfg["feats"]
+    NAME = cfg["name"]
+
     df = pd.read_csv(DATA)
     df = df[df["label"].isin([0, 1])].sort_values("datetime").reset_index(drop=True)
     for c in FEATS:
@@ -51,7 +71,7 @@ def main():
     maj_acc = accuracy_score(yte, np.full_like(yte, majority))
 
     print("=" * 70)
-    print(f"  PO3 收尾 ML 報告  總 {n} 筆(含訂單流)  整體 Win {base_rate:.1%}")
+    print(f"  {NAME} 收尾 ML 報告  總 {n} 筆  整體 Win {base_rate:.1%}")
     print(f"  訓練 {len(ytr)} / 樣本外 {len(yte)}   時間序切分(無未來洩漏)")
     print("=" * 70)
     print(f"  對照組：多數類(全猜{'輸' if majority==0 else '贏'}) 樣本外 Acc = {maj_acc:.1%}")
@@ -136,7 +156,7 @@ def main():
     plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "SimHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
     plt.tight_layout()
-    out = os.path.join(HERE, "ml_final_report.png")
+    out = os.path.join(HERE, f"ml_final_report_{args.dataset}.png")
     plt.savefig(out, dpi=110, bbox_inches="tight")
     print("-" * 70)
     print(f"  ✓ 四合一報告圖已存：{out}")

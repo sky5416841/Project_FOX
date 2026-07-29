@@ -55,11 +55,12 @@ def fetch_last(symbol, tf, n):
     return df.iloc[:-1].tail(n).reset_index(drop=True)   # 丟未收完的那根
 
 
-def render_readable(df, path):
-    """畫一張人看得懂的 K 線圖(有顏色/價格軸),給使用者對照『我看起來是不是也這樣』。"""
+def render_readable(df):
+    """畫一張人看得懂的 K 線圖(彩色/價格軸)並回傳 PNG bytes,給使用者對照判斷。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from io import BytesIO
     fig, ax = plt.subplots(figsize=(9, 3.4), dpi=110)
     for i, r in df.reset_index(drop=True).iterrows():
         col = "#26a69a" if r["close"] >= r["open"] else "#ef5350"
@@ -71,8 +72,11 @@ def render_readable(df, path):
     fig.patch.set_facecolor("#0e1117"); ax.set_facecolor("#0e1117")
     ax.tick_params(colors="#8899a6", labelsize=8)
     fig.tight_layout()
-    fig.savefig(path, dpi=110, bbox_inches="tight", facecolor="#0e1117")
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor="#0e1117")
     plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 def classify(symbol, tf):
@@ -85,11 +89,9 @@ def classify(symbol, tf):
         prob = F.softmax(load_model()(x), dim=1)[0]
     probs = {c: float(prob[i]) for i, c in enumerate(CLASSES)}
     cls = max(probs, key=probs.get)
-    chart = os.path.join(tempfile.gettempdir(), "cv_live_readable.png")
-    render_readable(df, chart)
     return {"symbol": symbol, "tf": tf, "n": WINDOW, "probs": probs,
             "cls": cls, "conf": probs[cls], "label_tw": TW[cls], "setup": SETUP[cls],
-            "chart": chart}
+            "chart_bytes": render_readable(df)}
 
 
 def predict(symbol, tf):

@@ -103,8 +103,8 @@ def render_readable(df, cls=None):
     ax.text(n - 1, last, f" {last:,.0f}", color="#eceff1", fontsize=8, va="center", zorder=5)
 
     # 環境提示框(直接回應「寬幅震盪=危險」)
-    warn = "⚠ 寬幅震盪·兩邊巴掌·絞肉區" if wide else "窄幅震盪"
-    info = f"區間寬度 {width_pct:.1f}%  |  {warn}\nSetup A 做多  R:R ≈ {rr:.1f}（碰下緣才進，別追中間）"
+    warn = "！寬幅震盪·兩邊巴掌·絞肉區" if wide else "窄幅震盪"
+    info = f"區間寬度 {width_pct:.1f}%  |  {warn}\nSetup A 做多  R:R 約 {rr:.1f}（碰下緣才進，別追中間）"
     ax.text(0.99, 0.02, info, transform=ax.transAxes, ha="right", va="bottom",
             fontsize=8, color="#ffd54f" if wide else "#b0bec5",
             bbox=dict(boxstyle="round", fc="#1a1f28", ec="#37474f", alpha=0.9), zorder=6)

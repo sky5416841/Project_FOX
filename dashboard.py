@@ -2672,6 +2672,10 @@ with _tab6:
     if _cvr and "error" in _cvr:
         st.error(f"CNN 判定失敗：{_cvr['error']}")
     elif _cvr:
+        if _cvr.get("chart") and os.path.exists(_cvr["chart"]):
+            st.image(_cvr["chart"],
+                     caption=f"{_cvr['symbol']} {_cvr['tf']} 最近 {_cvr['n']} 根（模型判斷的這段；你也對照看看像不像）",
+                     width="stretch")
         _twm = {"down": "📉 下降趨勢", "range": "🟰 盤整/震盪", "up": "📈 上升趨勢"}
         for _c in ["up", "range", "down"]:
             _p = _cvr["probs"][_c]

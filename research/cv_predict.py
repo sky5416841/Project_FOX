@@ -55,22 +55,50 @@ def fetch_last(symbol, tf, n):
     return df.iloc[:-1].tail(n).reset_index(drop=True)   # 丟未收完的那根
 
 
-def render_readable(df):
-    """畫一張人看得懂的 K 線圖(彩色/價格軸)並回傳 PNG bytes,給使用者對照判斷。"""
+def render_readable(df, cls=None):
+    """畫一張『交易者看得懂』的圖並回傳 PNG bytes:蠟燭 + EMA + 區間上下緣(支撐壓力)。
+    幫使用者看懂為什麼是趨勢/震盪、以及該在哪裡進場(區間邊緣)。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from io import BytesIO
-    fig, ax = plt.subplots(figsize=(9, 3.4), dpi=110)
-    for i, r in df.reset_index(drop=True).iterrows():
+    d = df.reset_index(drop=True)
+    n = len(d)
+    fig, ax = plt.subplots(figsize=(9.5, 4.2), dpi=110)
+
+    # 蠟燭
+    for i, r in d.iterrows():
         col = "#26a69a" if r["close"] >= r["open"] else "#ef5350"
-        ax.plot([i, i], [r["low"], r["high"]], color=col, linewidth=0.7)
-        ax.plot([i, i], [r["open"], r["close"]], color=col, linewidth=2.6)
-    ax.set_xticks([]); ax.grid(axis="y", alpha=0.15)
+        ax.plot([i, i], [r["low"], r["high"]], color=col, linewidth=0.7, zorder=3)
+        ax.plot([i, i], [r["open"], r["close"]], color=col, linewidth=2.6, zorder=3)
+
+    # EMA20(看趨勢還是圍著它上下磨=震盪)
+    ema = d["close"].ewm(span=20, adjust=False).mean()
+    ax.plot(range(n), ema, color="#ffb300", linewidth=1.4, alpha=0.9, label="EMA20", zorder=4)
+
+    # 區間上下緣(用分位數避免單根插針；= Setup A 該進場的邊)
+    hi = d["high"].quantile(0.90)
+    lo = d["low"].quantile(0.10)
+    ax.axhspan(lo, hi, color="#42a5f5", alpha=0.06, zorder=1)
+    for y, txt, c in [(hi, "壓力／區間上緣", "#ef9a9a"), (lo, "支撐／區間下緣", "#80cbc4")]:
+        ax.axhline(y, color=c, linestyle="--", linewidth=1, alpha=0.8, zorder=2)
+        ax.text(n * 0.005, y, f" {txt} {y:,.0f}", color=c, fontsize=8, va="bottom", zorder=5)
+
+    # 最新價
+    last = d["close"].iloc[-1]
+    ax.axhline(last, color="#eceff1", linewidth=0.6, alpha=0.4, zorder=2)
+    ax.text(n - 1, last, f" {last:,.0f}", color="#eceff1", fontsize=8, va="center", zorder=5)
+
+    title = {"up": "上升趨勢", "down": "下降趨勢", "range": "盤整／震盪"}.get(cls, "")
+    ax.set_title(f"CNN 判定：{title}" if title else "", color="#cfd8dc", fontsize=10, loc="left")
+    ax.set_xticks([]); ax.set_xlim(-1, n); ax.grid(axis="y", alpha=0.12)
     for s in ["top", "right"]:
         ax.spines[s].set_visible(False)
+    for s in ["left", "bottom"]:
+        ax.spines[s].set_color("#37474f")
     fig.patch.set_facecolor("#0e1117"); ax.set_facecolor("#0e1117")
     ax.tick_params(colors="#8899a6", labelsize=8)
+    ax.legend(loc="upper left", fontsize=8, facecolor="#1a1f28", edgecolor="none", labelcolor="#cfd8dc")
     fig.tight_layout()
     buf = BytesIO()
     fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor="#0e1117")
@@ -91,7 +119,7 @@ def classify(symbol, tf):
     cls = max(probs, key=probs.get)
     return {"symbol": symbol, "tf": tf, "n": WINDOW, "probs": probs,
             "cls": cls, "conf": probs[cls], "label_tw": TW[cls], "setup": SETUP[cls],
-            "chart_bytes": render_readable(df)}
+            "chart_bytes": render_readable(df, cls)}
 
 
 def predict(symbol, tf):

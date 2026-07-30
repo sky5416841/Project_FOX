@@ -34,11 +34,24 @@ RULES = [
 ]
 RULE_IDS = [r[0] for r in RULES]
 
+# Setup 劇本代號(對應 SETUP_PLAYBOOK.md);記錄用哪個 setup → 之後分類統計
+SETUPS = {
+    "A": "支撐反彈(震盪盤)",
+    "B": "突破回踩(趨勢啟動)",
+    "C": "趨勢回調(趨勢盤)",
+    "?": "其他/自訂",
+}
+
+COLS = ["datetime", "setup_type", "setup"] + RULE_IDS + ["score", "pnl", "note"]
+
 
 def _load():
     if os.path.exists(CSV):
-        return pd.read_csv(CSV)
-    return pd.DataFrame(columns=["datetime", "setup"] + RULE_IDS + ["score", "pnl", "note"])
+        df = pd.read_csv(CSV)
+        if "setup_type" not in df.columns:      # 舊檔沒有這欄→補上(向後相容)
+            df["setup_type"] = ""
+        return df
+    return pd.DataFrame(columns=COLS)
 
 
 def _save(df):
@@ -66,7 +79,10 @@ def log():
     print("  記一筆交易 — 逐條問你有沒有守(y=守 / n=破 / na=不適用)")
     print("  ⚠ 誠實面對自己,這本日誌是給你看的,騙它等於騙自己")
     print("=" * 60)
-    setup = input("這筆的 setup 名稱(例:回踩支撐做多): ").strip() or "(未命名)"
+    print("  用哪個 Setup? " + " / ".join(f"{k}={v}" for k, v in SETUPS.items()))
+    st = input("  Setup 代號 [A/B/C/?]: ").strip().upper()
+    setup_type = st if st in SETUPS else "?"
+    setup = input("這筆的 setup 名稱/備註(例:回踩支撐做多): ").strip() or SETUPS[setup_type]
     marks, followed, applicable = {}, 0, 0
     for rid, desc in RULES:
         v = _ask(f"  [{rid}] {desc}? (y/n/na) ")
@@ -83,7 +99,8 @@ def log():
     note = input("備註(破了哪條、當下情緒…): ").strip()
 
     row = {"datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-           "setup": setup, **marks, "score": score, "pnl": pnl, "note": note}
+           "setup_type": setup_type, "setup": setup, **marks,
+           "score": score, "pnl": pnl, "note": note}
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True) if not df.empty \
         else pd.DataFrame([row])
     _save(df)
@@ -155,6 +172,20 @@ def report():
         if dirtymask.sum():
             print(f"    ❌ 破戒  ({dirtymask.sum()}筆) 平均 {pnl[dirtymask].mean():+.2f}")
         print("  註:守規矩不保證單筆賺(市場有隨機性),但它保護你不被一次破戒歸零。")
+
+    # 分 Setup 統計:哪個 setup 我最守紀律 / 表現如何(量化自己,非預測市場)
+    if "setup_type" in df.columns and df["setup_type"].astype(str).str.strip().ne("").any():
+        print("-" * 64)
+        print("  分 Setup 自我體檢(量化『我』的表現,不是預測市場):")
+        for code, name in SETUPS.items():
+            sub = df[df["setup_type"] == code]
+            if len(sub) == 0:
+                continue
+            disc_s = pd.to_numeric(sub["score"], errors="coerce").mean()
+            pnl_s = pd.to_numeric(sub["pnl"], errors="coerce")
+            pnl_txt = f"平均損益 {pnl_s.mean():+.2f}" if pnl_s.notna().sum() else "無損益紀錄"
+            print(f"    [{code}] {name:<16} {len(sub):>2}筆  紀律分 {disc_s:>3.0f}  {pnl_txt}")
+        print("  → 看『哪個 setup 我最守得住』『哪個一直誘我破戒』,那就是你要練的地方。")
     print("=" * 64)
 
 

@@ -2874,10 +2874,12 @@ with _tab9:
                "核心指標 = 連續守規矩 streak，因為『只要破一條就可能歸零』。詳見 DISCIPLINE_SYSTEM.md。")
 
     _dj_csv = os.path.join(os.path.dirname(os.path.abspath(__file__)), "discipline_journal.csv")
-    _cols = ["datetime", "setup"] + _dj.RULE_IDS + ["score", "pnl", "note"]
+    _cols = ["datetime", "setup_type", "setup"] + _dj.RULE_IDS + ["score", "pnl", "note"]
     if os.path.exists(_dj_csv):
         try:
             _jdf = pd.read_csv(_dj_csv)
+            if "setup_type" not in _jdf.columns:
+                _jdf["setup_type"] = ""
         except Exception:
             _jdf = pd.DataFrame(columns=_cols)
     else:
@@ -2902,7 +2904,10 @@ with _tab9:
     # ── 記一筆（表單）────────────────────────────────────────────
     st.markdown("##### ✍️ 記一筆交易（勾選=有守住該條）")
     with st.form("disc_log_form", clear_on_submit=True):
-        _setup = st.text_input("setup 名稱", placeholder="例：回踩支撐做多")
+        _setup_type = st.selectbox("用哪個 Setup（對應 SETUP_PLAYBOOK）",
+                                   list(_dj.SETUPS.keys()),
+                                   format_func=lambda k: f"{k} — {_dj.SETUPS[k]}")
+        _setup = st.text_input("備註名稱（可留空）", placeholder="例：回踩支撐做多")
         _checks = {}
         _cc = st.columns(2)
         for _i, (_rid, _desc) in enumerate(_dj.RULES):
@@ -2919,7 +2924,7 @@ with _tab9:
         except ValueError:
             _pnlv = ""
         _row = {"datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "setup": _setup.strip() or "(未命名)",
+                "setup_type": _setup_type, "setup": _setup.strip() or _dj.SETUPS[_setup_type],
                 **{_rid: (1 if _checks[_rid] else 0) for _rid in _dj.RULE_IDS},
                 "score": _score, "pnl": _pnlv, "note": _note.strip()}
         _new = pd.concat([_jdf, pd.DataFrame([_row])], ignore_index=True) if len(_jdf) \
@@ -2945,8 +2950,26 @@ with _tab9:
         _bdf = pd.DataFrame(_brk).sort_values("破戒次數", ascending=False)
         st.dataframe(_bdf, width="stretch", hide_index=True)
 
+        # 分 Setup 自我體檢(量化『我』,非預測市場)
+        if _jdf["setup_type"].astype(str).str.strip().ne("").any():
+            st.markdown("##### 📊 分 Setup 自我體檢（量化『我』的表現，不是預測市場）")
+            _srows = []
+            for _code, _name in _dj.SETUPS.items():
+                _sub = _jdf[_jdf["setup_type"] == _code]
+                if len(_sub) == 0:
+                    continue
+                _ds = pd.to_numeric(_sub["score"], errors="coerce").mean()
+                _ps = pd.to_numeric(_sub["pnl"], errors="coerce")
+                _srows.append({"Setup": f"{_code} {_name}", "筆數": len(_sub),
+                               "平均紀律分": round(_ds),
+                               "乾淨%": f"{(pd.to_numeric(_sub['score'],errors='coerce')==100).mean()*100:.0f}%",
+                               "平均損益": round(_ps.mean(), 2) if _ps.notna().sum() else None})
+            if _srows:
+                st.dataframe(pd.DataFrame(_srows), width="stretch", hide_index=True)
+                st.caption("看哪個 setup 你最守得住、哪個一直誘你破戒 → 那就是你要練的地方。這是量化『自己』，不是預測市場。")
+
         st.markdown("##### 📜 近期紀錄")
-        _show = _jdf.tail(15).iloc[::-1][["datetime", "setup", "score", "pnl", "note"]]
+        _show = _jdf.tail(15).iloc[::-1][["datetime", "setup_type", "setup", "score", "pnl", "note"]]
         st.dataframe(_show, width="stretch", hide_index=True)
 
 

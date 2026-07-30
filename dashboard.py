@@ -2974,16 +2974,10 @@ with _tab9:
 
 
 # ── Tab 10：手動模擬倉 ─────────────────────────────────────────────────────
-with _tab10:
+@st.fragment(run_every=10)
+def frag_manual_positions():
+    """持倉/權益/歷史 每 10 秒自動刷新即時價(表單不放進來,免得輸入被重置)。"""
     import paper_manual as _pm
-    import risk_sizer as _rs
-    st.markdown("#### 🎮 手動模擬倉 &nbsp;"
-                "<span style='font-size:0.78rem;color:#5B7494;font-weight:400'>"
-                "你手動下單 · 幣安即時真價 · 含爆倉 · 串進場護欄</span>",
-                unsafe_allow_html=True)
-    st.caption("這是你手動練紀律的場子（跟 PO3/SMC 自動交易員不同）。開倉先過護欄；"
-               "開倉後別亂動（R5 不移停損、R6 不加碼）；平倉後去『🧘 紀律日誌』記一筆。⚠ 紙上錢、非投資建議。")
-
     _pstate = _pm.load_state()
     try:
         _pex = engine_core.make_exchange()
@@ -3002,8 +2996,8 @@ with _tab10:
     _q2.metric("累計淨損益", f"{_pstate['realized_pnl']:+,.2f}")
     _q3.metric("已平倉", f"{_pstate['closed_count']}")
     _q4.metric("持倉中", f"{len(_pstate['open'])}")
+    st.caption("↻ 持倉即時價每 10 秒自動刷新（停損/停利/爆倉觸發會自動平倉）")
 
-    # ── 當前持倉（即時浮盈 + 平倉鈕）────────────────────────────
     st.markdown("##### 📌 當前持倉")
     if _pstate["open"] and _pex is not None:
         for _p in _pstate["open"]:
@@ -3026,7 +3020,34 @@ with _tab10:
     elif not _pstate["open"]:
         st.caption("目前無持倉。用下方表單開一筆（記得先想好停損停利）。")
 
-    # ── 開倉（表單 + 護欄硬擋 R3）──────────────────────────────
+    # 歷史
+    _pm_closed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_manual_closed.csv")
+    if os.path.exists(_pm_closed):
+        try:
+            _hdf = pd.read_csv(_pm_closed)
+            _hn = len(_hdf); _hw = int((_hdf["net_pnl"] > 0).sum())
+            st.markdown(f"##### 📜 已平倉 {_hn} 筆 ｜ 勝率 {_hw/_hn*100:.0f}% ｜ "
+                        f"累計 {_hdf['net_pnl'].sum():+.2f} ｜ 平均 {_hdf['R'].mean():+.2f}R")
+            st.dataframe(_hdf.tail(15).iloc[::-1][
+                ["closed_at", "symbol", "side", "entry", "exit", "reason", "net_pnl", "R"]],
+                width="stretch", hide_index=True)
+        except Exception:
+            pass
+
+
+with _tab10:
+    import paper_manual as _pm
+    import risk_sizer as _rs
+    st.markdown("#### 🎮 手動模擬倉 &nbsp;"
+                "<span style='font-size:0.78rem;color:#5B7494;font-weight:400'>"
+                "你手動下單 · 幣安即時真價 · 含爆倉 · 串進場護欄</span>",
+                unsafe_allow_html=True)
+    st.caption("這是你手動練紀律的場子（跟 PO3/SMC 自動交易員不同）。開倉先過護欄；"
+               "開倉後別亂動（R5 不移停損、R6 不加碼）；平倉後去『🧘 紀律日誌』記一筆。⚠ 紙上錢、非投資建議。")
+
+    frag_manual_positions()     # 持倉/權益/歷史 自動刷新
+
+    # ── 開倉（表單 + 護欄硬擋；靜態,不放進 run_every 免得輸入被重置）────
     st.markdown("##### ➕ 開一筆（會先過護欄；停損擋不住爆倉會被拒絕）")
     with st.form("pm_open_form"):
         _fa, _fb, _fc, _fd = st.columns(4)
@@ -3039,8 +3060,15 @@ with _tab10:
         _tp = _ff.number_input("停利價", min_value=0.0, value=0.0, format="%.6f")
         _go = st.form_submit_button("跑護欄並開倉")
     if _go:
+        try:
+            _pex = engine_core.make_exchange()
+        except Exception as _e:
+            _pex = None
+            st.error(f"沒有行情連線：{_e}")
+        _pstate = _pm.load_state()
+        _eq = _pstate["equity"]
         if _pex is None:
-            st.error("沒有行情連線，無法開倉。")
+            pass
         elif _sl <= 0 or _tp <= 0:
             st.error("請填停損價和停利價（練紀律的第一條就是進場前定好出場）。")
         else:
@@ -3074,20 +3102,6 @@ with _tab10:
                         st.rerun()
             except Exception as _e:
                 st.error(f"開倉失敗：{_e}")
-
-    # ── 歷史 ───────────────────────────────────────────────
-    _pm_closed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_manual_closed.csv")
-    if os.path.exists(_pm_closed):
-        try:
-            _hdf = pd.read_csv(_pm_closed)
-            _hn = len(_hdf); _hw = int((_hdf["net_pnl"] > 0).sum())
-            st.markdown(f"##### 📜 已平倉 {_hn} 筆 ｜ 勝率 {_hw/_hn*100:.0f}% ｜ "
-                        f"累計 {_hdf['net_pnl'].sum():+.2f} ｜ 平均 {_hdf['R'].mean():+.2f}R")
-            st.dataframe(_hdf.tail(15).iloc[::-1][
-                ["closed_at", "symbol", "side", "entry", "exit", "reason", "net_pnl", "R"]],
-                width="stretch", hide_index=True)
-        except Exception:
-            pass
 
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────

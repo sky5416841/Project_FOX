@@ -55,6 +55,18 @@ def fetch_last(symbol, tf, n):
     return df.iloc[:-1].tail(n).reset_index(drop=True)   # 丟未收完的那根
 
 
+def _pfmt(x):
+    """價格自適應格式:大幣0位、中價2位、低價(ADA/DOGE)多給幾位,不會顯示成0。"""
+    ax = abs(x)
+    if ax >= 100:
+        return f"{x:,.0f}"
+    if ax >= 1:
+        return f"{x:,.2f}"
+    if ax >= 0.01:
+        return f"{x:.4f}"
+    return f"{x:.6f}"
+
+
 def render_readable(df, cls=None):
     """畫一張『交易者看得懂』的圖並回傳 PNG bytes:蠟燭 + EMA + 區間上下緣(支撐壓力)。
     幫使用者看懂為什麼是趨勢/震盪、以及該在哪裡進場(區間邊緣)。"""
@@ -90,9 +102,9 @@ def render_readable(df, cls=None):
     stop = d["low"].min() * 0.999
     rr = (hi - lo) / (lo - stop) if (lo - stop) > 0 else 0
     levels = [
-        (hi,   f"停利／壓力 {hi:,.0f}",       "#ef9a9a", "-"),
-        (lo,   f"做多進場／支撐 {lo:,.0f}",    "#66bb6a", "--"),
-        (stop, f"停損 {stop:,.0f}",           "#ef5350", ":"),
+        (hi,   f"停利／壓力 {_pfmt(hi)}",       "#ef9a9a", "-"),
+        (lo,   f"做多進場／支撐 {_pfmt(lo)}",    "#66bb6a", "--"),
+        (stop, f"停損 {_pfmt(stop)}",           "#ef5350", ":"),
     ]
     for y, txt, c, ls in levels:
         ax.axhline(y, color=c, linestyle=ls, linewidth=1.1, alpha=0.9, zorder=2)
@@ -100,7 +112,7 @@ def render_readable(df, cls=None):
 
     # 最新價
     ax.axhline(last, color="#eceff1", linewidth=0.6, alpha=0.4, zorder=2)
-    ax.text(n - 1, last, f" {last:,.0f}", color="#eceff1", fontsize=8, va="center", zorder=5)
+    ax.text(n - 1, last, f" {_pfmt(last)}", color="#eceff1", fontsize=8, va="center", zorder=5)
 
     # 環境提示框(直接回應「寬幅震盪=危險」)
     warn = "！寬幅震盪·兩邊巴掌·絞肉區" if wide else "窄幅震盪"

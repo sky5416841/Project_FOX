@@ -113,11 +113,33 @@ def render_readable(df, cls=None):
         info = f"區間寬度 {width_pct:.1f}%  |  {warn}\nSetup A 做多  R:R 約 {rr:.1f}（碰下緣才進，別追中間）"
         info_color = "#ffd54f" if wide else "#b0bec5"
     else:
-        # ── 趨勢盤 → Setup C:以 EMA 為動態支撐/壓力,等回調順勢進(不畫震盪盤價位) ──
-        _dir = "做多" if cls == "up" else "做空"
-        ax.text(n * 0.005, ema.iloc[-1], " EMA＝動態支撐/壓力（回調到這才進）",
-                color="#ffb300", fontsize=8, va="bottom", zorder=5)
-        info = (f"趨勢盤（Setup C {_dir}）\n順勢，等回調到 EMA 金線再進，別在半山腰追中間")
+        # ── 趨勢盤 → Setup C:回調到 EMA 順勢進,給出具體進場/停損/停利 ──
+        up = (cls == "up")
+        _dir = "做多" if up else "做空"
+        entry = float(ema.iloc[-1])                 # 回調到 EMA = 進場
+        if up:
+            stop = float(d["low"].tail(20).min()) * 0.999
+            tp = float(d["high"].max())
+            if stop >= entry: stop = entry * 0.985
+            if tp <= entry: tp = entry * 1.03
+        else:
+            stop = float(d["high"].tail(20).max()) * 1.001
+            tp = float(d["low"].min())
+            if stop <= entry: stop = entry * 1.015
+            if tp >= entry: tp = entry * 0.97
+        rr = abs(tp - entry) / abs(entry - stop) if abs(entry - stop) > 0 else 0
+        for y, txt, c, ls in [
+            (tp,    f"停利／目標 {_pfmt(tp)}",           "#ef9a9a", "-"),
+            (entry, f"回調進場（EMA）{_pfmt(entry)}",    "#66bb6a", "--"),
+            (stop,  f"停損 {_pfmt(stop)}",               "#ef5350", ":"),
+        ]:
+            ax.axhline(y, color=c, linestyle=ls, linewidth=1.1, alpha=0.9, zorder=2)
+            ax.text(n * 0.005, y, f" {txt}", color=c, fontsize=8, va="bottom", zorder=5)
+        if (up and last > entry) or ((not up) and last < entry):
+            note = f"現價 {_pfmt(last)} 還沒回到 EMA → 等回調到 {_pfmt(entry)} 才進，別追"
+        else:
+            note = "已回調到 EMA 附近 → 出現順勢確認 K 可考慮進"
+        info = f"趨勢盤（Setup C {_dir}）  R:R 約 {rr:.1f}\n{note}"
         info_color = "#80cbc4"
 
     # 最新價

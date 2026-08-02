@@ -90,35 +90,42 @@ def render_readable(df, cls=None):
     ema = d["close"].ewm(span=20, adjust=False).mean()
     ax.plot(range(n), ema, color="#ffb300", linewidth=1.4, alpha=0.9, label="EMA20", zorder=4)
 
-    # 區間上下緣(分位數避單根插針)= Setup A 的壓力/支撐
-    hi = d["high"].quantile(0.90)
-    lo = d["low"].quantile(0.10)
     last = d["close"].iloc[-1]
-    width_pct = (hi - lo) / last * 100
-    wide = width_pct > 3.0                      # 寬幅=危險絞肉
-    ax.axhspan(lo, hi, color="#42a5f5", alpha=0.06, zorder=1)
+    is_range = (cls == "range" or cls is None)
 
-    # ── Setup A 進出場價位(做多@支撐;停損放區間最低下方一點;停利到壓力)──
-    stop = d["low"].min() * 0.999
-    rr = (hi - lo) / (lo - stop) if (lo - stop) > 0 else 0
-    levels = [
-        (hi,   f"停利／壓力 {_pfmt(hi)}",       "#ef9a9a", "-"),
-        (lo,   f"做多進場／支撐 {_pfmt(lo)}",    "#66bb6a", "--"),
-        (stop, f"停損 {_pfmt(stop)}",           "#ef5350", ":"),
-    ]
-    for y, txt, c, ls in levels:
-        ax.axhline(y, color=c, linestyle=ls, linewidth=1.1, alpha=0.9, zorder=2)
-        ax.text(n * 0.005, y, f" {txt}", color=c, fontsize=8, va="bottom", zorder=5)
+    if is_range:
+        # ── 震盪盤 → Setup A:區間上下緣 + 做多進場/停損/停利 + R:R ──
+        hi = d["high"].quantile(0.90)
+        lo = d["low"].quantile(0.10)
+        width_pct = (hi - lo) / last * 100
+        wide = width_pct > 3.0                  # 寬幅=危險絞肉
+        ax.axhspan(lo, hi, color="#42a5f5", alpha=0.06, zorder=1)
+        stop = d["low"].min() * 0.999
+        rr = (hi - lo) / (lo - stop) if (lo - stop) > 0 else 0
+        for y, txt, c, ls in [
+            (hi,   f"停利／壓力 {_pfmt(hi)}",       "#ef9a9a", "-"),
+            (lo,   f"做多進場／支撐 {_pfmt(lo)}",    "#66bb6a", "--"),
+            (stop, f"停損 {_pfmt(stop)}",           "#ef5350", ":"),
+        ]:
+            ax.axhline(y, color=c, linestyle=ls, linewidth=1.1, alpha=0.9, zorder=2)
+            ax.text(n * 0.005, y, f" {txt}", color=c, fontsize=8, va="bottom", zorder=5)
+        warn = "！寬幅震盪·兩邊巴掌·絞肉區" if wide else "窄幅震盪"
+        info = f"區間寬度 {width_pct:.1f}%  |  {warn}\nSetup A 做多  R:R 約 {rr:.1f}（碰下緣才進，別追中間）"
+        info_color = "#ffd54f" if wide else "#b0bec5"
+    else:
+        # ── 趨勢盤 → Setup C:以 EMA 為動態支撐/壓力,等回調順勢進(不畫震盪盤價位) ──
+        _dir = "做多" if cls == "up" else "做空"
+        ax.text(n * 0.005, ema.iloc[-1], " EMA＝動態支撐/壓力（回調到這才進）",
+                color="#ffb300", fontsize=8, va="bottom", zorder=5)
+        info = (f"趨勢盤（Setup C {_dir}）\n順勢，等回調到 EMA 金線再進，別在半山腰追中間")
+        info_color = "#80cbc4"
 
     # 最新價
     ax.axhline(last, color="#eceff1", linewidth=0.6, alpha=0.4, zorder=2)
     ax.text(n - 1, last, f" {_pfmt(last)}", color="#eceff1", fontsize=8, va="center", zorder=5)
 
-    # 環境提示框(直接回應「寬幅震盪=危險」)
-    warn = "！寬幅震盪·兩邊巴掌·絞肉區" if wide else "窄幅震盪"
-    info = f"區間寬度 {width_pct:.1f}%  |  {warn}\nSetup A 做多  R:R 約 {rr:.1f}（碰下緣才進，別追中間）"
     ax.text(0.99, 0.02, info, transform=ax.transAxes, ha="right", va="bottom",
-            fontsize=8, color="#ffd54f" if wide else "#b0bec5",
+            fontsize=8, color=info_color,
             bbox=dict(boxstyle="round", fc="#1a1f28", ec="#37474f", alpha=0.9), zorder=6)
 
     title = {"up": "上升趨勢", "down": "下降趨勢", "range": "盤整／震盪"}.get(cls, "")

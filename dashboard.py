@@ -131,6 +131,10 @@ st.markdown("""
   html, body, [data-testid="stAppViewContainer"] {
     background-color: #080C12;
     color: #E0E6F0;
+    font-family: 'Inter', 'Noto Sans TC', 'Segoe UI', system-ui, sans-serif;
+  }
+  /* 數字/數據保留等寬,其餘用柔和無襯線(去死板) */
+  .metric-value, [data-testid="stMetricValue"], code, pre {
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
   }
 
@@ -254,6 +258,39 @@ st.markdown("""
     font-size: 0.83rem;
     color: #5B7494;
   }
+
+  /* ── 去死板：把預設 st.metric 變成卡片 + hover ── */
+  [data-testid="stMetric"] {
+    background: linear-gradient(135deg, #0D1321 0%, #131B2B 100%);
+    border: 1px solid #1E2D45;
+    border-radius: 12px;
+    padding: 0.85rem 1.05rem;
+    transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
+  }
+  [data-testid="stMetric"]:hover {
+    border-color: #2C4468;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0,0,0,.35);
+  }
+  [data-testid="stMetricLabel"] p { color:#7089A8; letter-spacing:.03em; font-size:.74rem; }
+  [data-testid="stMetricValue"] { font-weight:700; }
+  /* 分頁列柔化 */
+  button[data-baseweb="tab"] { border-radius: 8px 8px 0 0; transition: background .18s; }
+  button[data-baseweb="tab"]:hover { background: rgba(0,194,255,.06); }
+  /* 按鈕圓角 + hover 微浮 */
+  .stButton>button, .stForm button {
+    border-radius: 10px; border: 1px solid #24344F; transition: all .18s ease;
+  }
+  .stButton>button:hover, .stForm button:hover {
+    border-color: #00C2FF; transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,194,255,.12);
+  }
+  /* 表格 / 圖片圓角 */
+  [data-testid="stDataFrame"], [data-testid="stImage"] img {
+    border-radius: 10px; overflow: hidden;
+  }
+  /* 展開器/資訊框柔化邊角 */
+  [data-testid="stExpander"], [data-testid="stAlert"] { border-radius: 10px; }
 </style>
 """, unsafe_allow_html=True)
 

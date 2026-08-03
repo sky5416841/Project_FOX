@@ -109,9 +109,22 @@ def render_readable(df, cls=None):
         ]:
             ax.axhline(y, color=c, linestyle=ls, linewidth=1.1, alpha=0.9, zorder=2)
             ax.text(n * 0.005, y, f" {txt}", color=c, fontsize=8, va="bottom", zorder=5)
-        warn = "！寬幅震盪·兩邊巴掌·絞肉區" if wide else "窄幅震盪"
-        info = f"區間寬度 {width_pct:.1f}%  |  {warn}\nSetup A 做多  R:R 約 {rr:.1f}（碰下緣才進，別追中間）"
-        info_color = "#ffd54f" if wide else "#b0bec5"
+        warn = "！寬幅震盪·絞肉區" if wide else "窄幅震盪"
+        # 依現價位置給明確可執行判斷(而不是不管在哪都說「碰下線才進」)
+        pos = (last - lo) / (hi - lo) if (hi - lo) > 0 else 0.5
+        if last < lo:
+            state = f"🚫 跌破支撐 {_pfmt(lo)} → 破底風險，別進（等站回上方再說）"
+            info_color = "#ef5350"
+        elif last <= lo * 1.004:
+            state = "🟢 接近支撐 → 等撐住的綠K確認再進（別接刀）"
+            info_color = "#66bb6a"
+        elif pos < 0.5:
+            state = "⏳ 在區間中下 → 還沒到支撐，等回落，別追"
+            info_color = "#ffd54f" if wide else "#b0bec5"
+        else:
+            state = "⏳ 在區間上半 → 別追多（這裡偏目標區）"
+            info_color = "#ffd54f" if wide else "#b0bec5"
+        info = f"區間寬度 {width_pct:.1f}% | {warn} | Setup A R:R約{rr:.1f}\n{state}"
     else:
         # ── 趨勢盤 → Setup C:回調到 EMA 順勢進,給出具體進場/停損/停利 ──
         up = (cls == "up")

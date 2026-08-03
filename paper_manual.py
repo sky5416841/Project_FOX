@@ -125,6 +125,7 @@ def settle(state, ex, verbose=True):
             row = {"id": p["id"], "symbol": p["symbol"], "side": p["side"],
                    "entry": p["entry"], "exit": round(exit_px, 6), "reason": reason,
                    "qty": p["qty"], "net_pnl": round(net, 2), "R": round(r_mult, 2),
+                   "rr": p.get("rr", ""), "fair": p.get("fair", ""),
                    "opened_at": p["opened_at"],
                    "closed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
             append_closed(row)
@@ -141,11 +142,14 @@ def settle(state, ex, verbose=True):
 def add_position(state, symbol, side, entry, leverage, sl, tp, r):
     """把一筆已算好護欄(r)的部位加進帳本(不印字、不抓價),CLI 與網頁共用。"""
     open_fee = r["notional"] * FEE
+    _rr = r.get("rr")
+    _fair = 1.0 / (1.0 + _rr) if _rr else None      # 隨機漫步下先碰停利的公平勝率
     pos = {"id": state["next_id"], "symbol": _norm(symbol), "side": side,
            "entry": round(entry, 6), "qty": round(r["qty"], 8),
            "notional": round(r["notional"], 2), "leverage": leverage,
            "sl": round(sl, 6), "tp": round(tp, 6), "liq": round(r["liq"], 6),
            "risk_amt": round(r["risk_amt"], 2), "open_fee": round(open_fee, 6),
+           "rr": round(_rr, 3) if _rr else "", "fair": round(_fair, 4) if _fair else "",
            "opened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     state["next_id"] += 1
     state["open"].append(pos)
@@ -177,6 +181,7 @@ def close_manual(state, ex, pid):
             append_closed({"id": p["id"], "symbol": p["symbol"], "side": p["side"],
                            "entry": p["entry"], "exit": round(px, 6), "reason": "手動平倉",
                            "qty": p["qty"], "net_pnl": round(net, 2), "R": round(r_mult, 2),
+                           "rr": p.get("rr", ""), "fair": p.get("fair", ""),
                            "opened_at": p["opened_at"],
                            "closed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
             state["open"].remove(p); save_state(state)
@@ -213,6 +218,33 @@ def show_status(state, ex):
     print("  平倉:python paper_manual.py close <#>   平完去紀律日誌記一筆")
 
 
+def winrate_vs_fair():
+    """回傳 (n, 實際勝率%, 公平勝率%, z值, 判定字串)。用有紀錄 R:R/公平勝率的已平倉筆。
+    回答『這是運氣還是 edge』:實際勝率有沒有顯著高於 R:R 隱含的公平值。"""
+    if not os.path.exists(CLOSED_CSV):
+        return None
+    df = pd.read_csv(CLOSED_CSV)
+    if "fair" not in df.columns:
+        return None
+    df = df[pd.to_numeric(df["fair"], errors="coerce").notna()].copy()
+    n = len(df)
+    if n == 0:
+        return None
+    win = (pd.to_numeric(df["net_pnl"], errors="coerce") > 0)
+    aw = win.mean()
+    fw = pd.to_numeric(df["fair"], errors="coerce").mean()
+    from math import sqrt
+    se = sqrt(fw * (1 - fw) / n) if 0 < fw < 1 else 0
+    z = (aw - fw) / se if se > 0 else 0.0
+    if n < 30:
+        verdict = f"樣本太小(n={n}<30)→ 還分不出運氣還是edge,繼續打"
+    elif z > 1.64:
+        verdict = "實際顯著 > 公平(z>1.64)→ 疑似有 edge!值得嚴格複驗"
+    else:
+        verdict = "沒有顯著高於公平值 → 統計上=運氣(公平銅板)"
+    return n, aw * 100, fw * 100, z, verdict
+
+
 def show_history(state):
     if not os.path.exists(CLOSED_CSV):
         print("還沒有已平倉紀錄。"); return
@@ -221,6 +253,11 @@ def show_history(state):
     print("=" * 60)
     print(f"  已平倉 {n} 筆  勝率 {wins/n*100:.0f}%  "
           f"累計淨損益 {df['net_pnl'].sum():+.2f}  平均 {df['R'].mean():+.2f}R")
+    wf = winrate_vs_fair()
+    if wf:
+        wn, waw, wfw, wz, wv = wf
+        print(f"  edge 檢定(n={wn}): 實際勝率 {waw:.0f}% vs 公平 {wfw:.0f}%  z={wz:+.2f}")
+        print(f"    → {wv}")
     print("=" * 60)
     print(df.tail(15).to_string(index=False))
 

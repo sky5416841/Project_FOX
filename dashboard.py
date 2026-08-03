@@ -3028,6 +3028,21 @@ def frag_manual_positions():
             _hn = len(_hdf); _hw = int((_hdf["net_pnl"] > 0).sum())
             st.markdown(f"##### 📜 已平倉 {_hn} 筆 ｜ 勝率 {_hw/_hn*100:.0f}% ｜ "
                         f"累計 {_hdf['net_pnl'].sum():+.2f} ｜ 平均 {_hdf['R'].mean():+.2f}R")
+            # edge 檢定:實際勝率 vs R:R 公平值(回答『運氣還是實力』)
+            _wf = _pm.winrate_vs_fair()
+            if _wf:
+                _wn, _waw, _wfw, _wz, _wv = _wf
+                _e1, _e2, _e3, _e4 = st.columns(4)
+                _e1.metric("實際勝率", f"{_waw:.0f}%")
+                _e2.metric("公平勝率(R:R隱含)", f"{_wfw:.0f}%")
+                _e3.metric("實際−公平", f"{_waw-_wfw:+.0f}pt", f"z={_wz:+.2f}")
+                _e4.metric("樣本", f"{_wn}", f"目標≥30")
+                st.progress(min(_wn / 30, 1.0))
+                if "運氣" in _wv or "太小" in _wv:
+                    st.info(f"🎲 {_wv}")
+                else:
+                    st.success(f"🎯 {_wv}")
+                st.caption("回答『這是運氣還是 edge』：實際勝率要**顯著高於**公平值(z>1.64)、且樣本≥30，才算證明有 edge。否則就是公平銅板。")
             st.dataframe(_hdf.tail(15).iloc[::-1][
                 ["closed_at", "symbol", "side", "entry", "exit", "reason", "net_pnl", "R"]],
                 width="stretch", hide_index=True)

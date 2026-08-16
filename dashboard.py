@@ -3100,9 +3100,11 @@ with _tab10:
     frag_manual_positions()     # 持倉/權益/歷史 自動刷新
 
     # ── 看盤 → 一鍵帶入 Setup 價位(省得另外看圖+手打停損停利)────
+    _PM_COINS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
+                 "ADA/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT", "DOT/USDT", "TRX/USDT"]
     st.markdown("##### 🔍 看盤 → 一鍵帶入 Setup 價位（不用手打）")
     _ka, _kb, _kc = st.columns([2, 1, 1])
-    _look_sym = _ka.text_input("市場", value=st.session_state.get("pm_sym", "BTC/USDT"), key="pm_look_sym")
+    _look_sym = _ka.selectbox("市場", _PM_COINS, key="pm_look_sym")
     _look_tf = _kb.selectbox("時框", ["1h", "4h", "15m"], key="pm_look_tf")
     if _kc.button("🔍 看盤 + 帶入", key="pm_look_btn"):
         with st.spinner("抓 K 線 + CNN 判定中…"):
@@ -3136,7 +3138,9 @@ with _tab10:
     st.markdown("##### ➕ 開一筆（會先過護欄；停損擋不住爆倉會被拒絕）")
     with st.form("pm_open_form"):
         _fa, _fb, _fc, _fd = st.columns(4)
-        _sym = _fa.text_input("市場", value=st.session_state.get("pm_sym", "BTC/USDT"))
+        _sym_def = st.session_state.get("pm_sym", "BTC/USDT")
+        _sym = _fa.selectbox("市場", _PM_COINS,
+                             index=_PM_COINS.index(_sym_def) if _sym_def in _PM_COINS else 0)
         _sd = _fb.selectbox("方向", ["long", "short"],
                             index=(1 if st.session_state.get("pm_fill_side") == "short" else 0))
         _lev = _fc.number_input("槓桿", min_value=1.0, max_value=125.0, value=10.0, step=1.0)

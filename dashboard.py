@@ -3099,17 +3099,53 @@ with _tab10:
 
     frag_manual_positions()     # 持倉/權益/歷史 自動刷新
 
-    # ── 開倉（表單 + 護欄硬擋；靜態,不放進 run_every 免得輸入被重置）────
+    # ── 看盤 → 一鍵帶入 Setup 價位(省得另外看圖+手打停損停利)────
+    st.markdown("##### 🔍 看盤 → 一鍵帶入 Setup 價位（不用手打）")
+    _ka, _kb, _kc = st.columns([2, 1, 1])
+    _look_sym = _ka.text_input("市場", value=st.session_state.get("pm_sym", "BTC/USDT"), key="pm_look_sym")
+    _look_tf = _kb.selectbox("時框", ["1h", "4h", "15m"], key="pm_look_tf")
+    if _kc.button("🔍 看盤 + 帶入", key="pm_look_btn"):
+        with st.spinner("抓 K 線 + CNN 判定中…"):
+            try:
+                import sys as _sys, importlib as _il
+                _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "research"))
+                import cv_predict as _cvp
+                _il.reload(_cvp)
+                _res = _cvp.classify(_look_sym, _look_tf)
+                _lv = _res["levels"]
+                st.session_state.pm_look = {"chart": _res["chart_bytes"], "label": _res["label_tw"],
+                                            "conf": _res["conf"], "lv": _lv}
+                st.session_state.pm_sym = _look_sym
+                st.session_state.pm_fill_side = _lv["side"]
+                st.session_state.pm_fill_sl = float(_lv["sl"])
+                st.session_state.pm_fill_tp = float(_lv["tp"])
+            except Exception as _e:
+                st.session_state.pm_look = {"error": str(_e)}
+        st.rerun()
+    _look = st.session_state.get("pm_look")
+    if _look and "error" in _look:
+        st.error(f"看盤失敗：{_look['error']}")
+    elif _look:
+        st.image(_look["chart"], width="stretch")
+        _lv = _look["lv"]
+        st.info(f"CNN：{_look['label']}（{_look['conf']*100:.0f}%）→ 建議 **{_lv['side'].upper()}**"
+                f"｜停損 {_lv['sl']:g}｜停利 {_lv['tp']:g}｜R:R {_lv['rr']}"
+                f"　✅ 已帶入下方表單，確認就按開倉（進場用市價）")
+
+    # ── 開倉（表單 + 護欄硬擋；停損停利已由上方帶入,可直接改）────
     st.markdown("##### ➕ 開一筆（會先過護欄；停損擋不住爆倉會被拒絕）")
     with st.form("pm_open_form"):
         _fa, _fb, _fc, _fd = st.columns(4)
-        _sym = _fa.text_input("市場", value="BTC/USDT")
-        _sd = _fb.selectbox("方向", ["long", "short"])
+        _sym = _fa.text_input("市場", value=st.session_state.get("pm_sym", "BTC/USDT"))
+        _sd = _fb.selectbox("方向", ["long", "short"],
+                            index=(1 if st.session_state.get("pm_fill_side") == "short" else 0))
         _lev = _fc.number_input("槓桿", min_value=1.0, max_value=125.0, value=10.0, step=1.0)
         _rk = _fd.number_input("風險%", min_value=0.1, max_value=5.0, value=1.0, step=0.5)
         _fe, _ff = st.columns(2)
-        _sl = _fe.number_input("停損價", min_value=0.0, value=0.0, format="%.6f")
-        _tp = _ff.number_input("停利價", min_value=0.0, value=0.0, format="%.6f")
+        _sl = _fe.number_input("停損價", min_value=0.0,
+                               value=float(st.session_state.get("pm_fill_sl", 0.0)), format="%.6f")
+        _tp = _ff.number_input("停利價", min_value=0.0,
+                               value=float(st.session_state.get("pm_fill_tp", 0.0)), format="%.6f")
         _go = st.form_submit_button("跑護欄並開倉")
     if _go:
         try:

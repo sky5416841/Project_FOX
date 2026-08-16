@@ -193,7 +193,34 @@ def classify(symbol, tf):
     cls = max(probs, key=probs.get)
     return {"symbol": symbol, "tf": tf, "n": WINDOW, "probs": probs,
             "cls": cls, "conf": probs[cls], "label_tw": TW[cls], "setup": SETUP[cls],
-            "chart_bytes": render_readable(df, cls)}
+            "chart_bytes": render_readable(df, cls), "levels": _levels(df, cls)}
+
+
+def _levels(df, cls):
+    """回傳這個 Setup 的可用價位 {side, entry, sl, tp, rr},給模擬倉一鍵帶入(省得手打)。"""
+    d = df.reset_index(drop=True)
+    last = float(d["close"].iloc[-1])
+    if cls == "range":
+        lo = float(d["low"].quantile(0.10)); hi = float(d["high"].quantile(0.90))
+        sl = float(d["low"].min()) * 0.999
+        side, entry, tp = "long", lo, hi           # 做多@支撐,停利@壓力
+    elif cls == "up":
+        ema = float(d["close"].ewm(span=20, adjust=False).mean().iloc[-1])
+        sl = float(d["low"].tail(20).min()) * 0.999
+        tp = float(d["high"].max())
+        side, entry = "long", ema
+        if sl >= entry: sl = entry * 0.985
+        if tp <= entry: tp = entry * 1.03
+    else:  # down
+        ema = float(d["close"].ewm(span=20, adjust=False).mean().iloc[-1])
+        sl = float(d["high"].tail(20).max()) * 1.001
+        tp = float(d["low"].min())
+        side, entry = "short", ema
+        if sl <= entry: sl = entry * 1.015
+        if tp >= entry: tp = entry * 0.97
+    rr = abs(tp - entry) / abs(entry - sl) if abs(entry - sl) > 0 else 0
+    return {"side": side, "entry": round(entry, 6), "sl": round(sl, 6),
+            "tp": round(tp, 6), "rr": round(rr, 2), "last": round(last, 6)}
 
 
 def predict(symbol, tf):

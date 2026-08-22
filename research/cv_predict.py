@@ -67,6 +67,30 @@ def _pfmt(x):
     return f"{x:.6f}"
 
 
+def _calc_levels(d, cls):
+    """統一算 Setup 價位(圖與模擬倉共用,確保一致)。趨勢停損=EMA±1.5ATR(不用整段起漲低點)。"""
+    last = float(d["close"].iloc[-1])
+    atr = float((d["high"] - d["low"]).tail(14).mean()) or last * 0.01
+    if cls in ("range", None):
+        hi = float(d["high"].quantile(0.90)); lo = float(d["low"].quantile(0.10))
+        entry, sl, tp, side = lo, float(d["low"].min()) * 0.999, hi, "long"
+        extra = {"support": lo, "resistance": hi, "width_pct": (hi - lo) / last * 100}
+    elif cls == "up":
+        ema = float(d["close"].ewm(span=20, adjust=False).mean().iloc[-1])
+        entry, sl, tp, side = ema, ema - 1.5 * atr, float(d["high"].max()), "long"
+        if tp <= entry:
+            tp = entry + 2 * (entry - sl)
+        extra = {"ema": ema}
+    else:  # down
+        ema = float(d["close"].ewm(span=20, adjust=False).mean().iloc[-1])
+        entry, sl, tp, side = ema, ema + 1.5 * atr, float(d["low"].min()), "short"
+        if tp >= entry:
+            tp = entry - 2 * (sl - entry)
+        extra = {"ema": ema}
+    rr = abs(tp - entry) / abs(entry - sl) if abs(entry - sl) > 0 else 0
+    return dict(side=side, entry=entry, sl=sl, tp=tp, rr=rr, last=last, **extra)
+
+
 def render_readable(df, cls=None):
     """畫一張『交易者看得懂』的圖並回傳 PNG bytes:蠟燭 + EMA + 區間上下緣(支撐壓力)。
     幫使用者看懂為什麼是趨勢/震盪、以及該在哪裡進場(區間邊緣)。"""
@@ -90,69 +114,41 @@ def render_readable(df, cls=None):
     ema = d["close"].ewm(span=20, adjust=False).mean()
     ax.plot(range(n), ema, color="#ffb300", linewidth=1.4, alpha=0.9, label="EMA20", zorder=4)
 
-    last = d["close"].iloc[-1]
-    is_range = (cls == "range" or cls is None)
+    last = float(d["close"].iloc[-1])
+    lv = _calc_levels(d, cls)                     # 圖與模擬倉共用同一套價位
+    _range = cls in ("range", None)
+    _entry_lbl = "做多進場／支撐" if _range else "回調進場（EMA）"
+    _tp_lbl = "壓力" if _range else "目標"
+    for y, txt, c, ls in [
+        (lv["tp"],    f"停利／{_tp_lbl} {_pfmt(lv['tp'])}", "#ef9a9a", "-"),
+        (lv["entry"], f"{_entry_lbl} {_pfmt(lv['entry'])}", "#66bb6a", "--"),
+        (lv["sl"],    f"停損 {_pfmt(lv['sl'])}",            "#ef5350", ":"),
+    ]:
+        ax.axhline(y, color=c, linestyle=ls, linewidth=1.1, alpha=0.9, zorder=2)
+        ax.text(n * 0.005, y, f" {txt}", color=c, fontsize=8, va="bottom", zorder=5)
 
-    if is_range:
-        # ── 震盪盤 → Setup A:區間上下緣 + 做多進場/停損/停利 + R:R ──
-        hi = d["high"].quantile(0.90)
-        lo = d["low"].quantile(0.10)
-        width_pct = (hi - lo) / last * 100
-        wide = width_pct > 3.0                  # 寬幅=危險絞肉
+    if _range:
+        lo, hi, wpct = lv["support"], lv["resistance"], lv["width_pct"]
         ax.axhspan(lo, hi, color="#42a5f5", alpha=0.06, zorder=1)
-        stop = d["low"].min() * 0.999
-        rr = (hi - lo) / (lo - stop) if (lo - stop) > 0 else 0
-        for y, txt, c, ls in [
-            (hi,   f"停利／壓力 {_pfmt(hi)}",       "#ef9a9a", "-"),
-            (lo,   f"做多進場／支撐 {_pfmt(lo)}",    "#66bb6a", "--"),
-            (stop, f"停損 {_pfmt(stop)}",           "#ef5350", ":"),
-        ]:
-            ax.axhline(y, color=c, linestyle=ls, linewidth=1.1, alpha=0.9, zorder=2)
-            ax.text(n * 0.005, y, f" {txt}", color=c, fontsize=8, va="bottom", zorder=5)
+        wide = wpct > 3.0
         warn = "！寬幅震盪·絞肉區" if wide else "窄幅震盪"
-        # 依現價位置給明確可執行判斷(而不是不管在哪都說「碰下線才進」)
         pos = (last - lo) / (hi - lo) if (hi - lo) > 0 else 0.5
         if last < lo:
-            state = f"🚫 跌破支撐 {_pfmt(lo)} → 破底風險，別進（等站回上方再說）"
-            info_color = "#ef5350"
+            state = f"🚫 跌破支撐 {_pfmt(lo)} → 破底風險，別進（等站回上方）"; info_color = "#ef5350"
         elif last <= lo * 1.004:
-            state = "🟢 接近支撐 → 等撐住的綠K確認再進（別接刀）"
-            info_color = "#66bb6a"
+            state = "🟢 接近支撐 → 等撐住的綠K確認再進（別接刀）"; info_color = "#66bb6a"
         elif pos < 0.5:
-            state = "⏳ 在區間中下 → 還沒到支撐，等回落，別追"
-            info_color = "#ffd54f" if wide else "#b0bec5"
+            state = "⏳ 在區間中下 → 還沒到支撐，等回落，別追"; info_color = "#ffd54f" if wide else "#b0bec5"
         else:
-            state = "⏳ 在區間上半 → 別追多（這裡偏目標區）"
-            info_color = "#ffd54f" if wide else "#b0bec5"
-        info = f"區間寬度 {width_pct:.1f}% | {warn} | Setup A R:R約{rr:.1f}\n{state}"
+            state = "⏳ 在區間上半 → 別追多（這裡偏目標區）"; info_color = "#ffd54f" if wide else "#b0bec5"
+        info = f"區間寬度 {wpct:.1f}% | {warn} | Setup A R:R約{lv['rr']:.1f}\n{state}"
     else:
-        # ── 趨勢盤 → Setup C:回調到 EMA 順勢進,給出具體進場/停損/停利 ──
         up = (cls == "up")
-        _dir = "做多" if up else "做空"
-        entry = float(ema.iloc[-1])                 # 回調到 EMA = 進場
-        if up:
-            stop = float(d["low"].tail(20).min()) * 0.999
-            tp = float(d["high"].max())
-            if stop >= entry: stop = entry * 0.985
-            if tp <= entry: tp = entry * 1.03
-        else:
-            stop = float(d["high"].tail(20).max()) * 1.001
-            tp = float(d["low"].min())
-            if stop <= entry: stop = entry * 1.015
-            if tp >= entry: tp = entry * 0.97
-        rr = abs(tp - entry) / abs(entry - stop) if abs(entry - stop) > 0 else 0
-        for y, txt, c, ls in [
-            (tp,    f"停利／目標 {_pfmt(tp)}",           "#ef9a9a", "-"),
-            (entry, f"回調進場（EMA）{_pfmt(entry)}",    "#66bb6a", "--"),
-            (stop,  f"停損 {_pfmt(stop)}",               "#ef5350", ":"),
-        ]:
-            ax.axhline(y, color=c, linestyle=ls, linewidth=1.1, alpha=0.9, zorder=2)
-            ax.text(n * 0.005, y, f" {txt}", color=c, fontsize=8, va="bottom", zorder=5)
-        if (up and last > entry) or ((not up) and last < entry):
-            note = f"現價 {_pfmt(last)} 還沒回到 EMA → 等回調到 {_pfmt(entry)} 才進，別追"
+        if (up and last > lv["entry"]) or ((not up) and last < lv["entry"]):
+            note = f"現價 {_pfmt(last)} 還沒回到 EMA → 等回調到 {_pfmt(lv['entry'])} 才進，別追"
         else:
             note = "已回調到 EMA 附近 → 出現順勢確認 K 可考慮進"
-        info = f"趨勢盤（Setup C {_dir}）  R:R 約 {rr:.1f}\n{note}"
+        info = f"趨勢盤（Setup C {'做多' if up else '做空'}）  R:R 約 {lv['rr']:.1f}\n{note}"
         info_color = "#80cbc4"
 
     # 最新價
@@ -197,29 +193,11 @@ def classify(symbol, tf):
 
 
 def _levels(df, cls):
-    """回傳這個 Setup 的可用價位 {side, sl, tp, rr},給模擬倉一鍵帶入(省得手打)。
-    R:R 用『市價進場』算(模擬倉是市價開,不是掛在支撐)→顯示的 R:R = 實際會拿到的。"""
-    d = df.reset_index(drop=True)
-    last = float(d["close"].iloc[-1])
-    if cls == "range":
-        sl = float(d["low"].min()) * 0.999
-        tp = float(d["high"].quantile(0.90))       # 停利@壓力
-        side = "long"
-    elif cls == "up":
-        sl = float(d["low"].tail(20).min()) * 0.999
-        tp = float(d["high"].max())
-        side = "long"
-        if sl >= last: sl = last * 0.985
-        if tp <= last: tp = last * 1.03
-    else:  # down
-        sl = float(d["high"].tail(20).max()) * 1.001
-        tp = float(d["low"].min())
-        side = "short"
-        if sl <= last: sl = last * 1.015
-        if tp >= last: tp = last * 0.97
-    rr = abs(tp - last) / abs(last - sl) if abs(last - sl) > 0 else 0
-    return {"side": side, "entry": round(last, 6), "sl": round(sl, 6),
-            "tp": round(tp, 6), "rr": round(rr, 2), "last": round(last, 6)}
+    """回傳 Setup 可用價位 {side,entry,sl,tp,rr},給模擬倉一鍵帶入。用 _calc_levels(與圖同一套)。
+    進場=Setup計畫點(震盪@支撐/趨勢@EMA);停損=區間下方 or EMA±1.5ATR;R:R 從計畫進場算。"""
+    lv = _calc_levels(df.reset_index(drop=True), cls)
+    return {"side": lv["side"], "entry": round(lv["entry"], 6), "sl": round(lv["sl"], 6),
+            "tp": round(lv["tp"], 6), "rr": round(lv["rr"], 2), "last": round(lv["last"], 6)}
 
 
 def predict(symbol, tf):

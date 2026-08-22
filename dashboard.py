@@ -2724,10 +2724,13 @@ with _tab6:
                      width="stretch")
         _dirs = [_m["cls"] for _m in _ms]
         if len(set(_dirs)) == 1:
-            st.success(f"✅ 三時框一致：{_ms[0]['label_tw']} → {_ms[0]['setup']}")
+            st.info(f"三時框同向：{_ms[0]['label_tw']}（環境一致、較好機械執行）→ {_ms[0]['setup']}。"
+                    f"⚠ 一致≠更會贏——多時框共振(n_align)已證無 edge，只是盤面較不打架。")
         else:
             _txt = " ｜ ".join(_m["tf"] + " " + _m["label_tw"] for _m in _ms)
-            st.warning(f"⚠ 時框分歧：{_txt} → 觀望，或以 4h 方向為主、等 1h/15m 回到同向再進")
+            st.warning(f"⚠ 時框分歧：{_txt}。分歧＝低品質盤，最乾淨是【觀望】。"
+                       f"真要做，只做與大週期(4h)同向的那半、絕不逆勢。"
+                       f"⚠ 別把「等時框共振再進」當進場訊號——共振無 edge(n_align 已證)。")
     elif _cvr:
         if _cvr.get("chart_bytes"):
             st.image(_cvr["chart_bytes"],

@@ -172,7 +172,7 @@ def render_readable(df, cls=None):
         ax.spines[s].set_color("#37474f")
     fig.patch.set_facecolor("#0e1117"); ax.set_facecolor("#0e1117")
     ax.tick_params(colors="#8899a6", labelsize=8)
-    ax.legend(loc="upper left", fontsize=8, facecolor="#1a1f28", edgecolor="none", labelcolor="#cfd8dc")
+    # 不放圖例(金線=均線,一看就懂),免得左上圖例擋到停利/壓力標籤
     fig.tight_layout()
     buf = BytesIO()
     fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor="#0e1117")

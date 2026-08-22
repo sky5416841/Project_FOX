@@ -2697,6 +2697,7 @@ with _tab6:
     _cv_tf = _cvc2.selectbox("時框", ["1h", "4h", "15m"], key="cv_tf")
     _cvc3.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)  # 對齊下拉選單
     _cv_go = _cvc3.button("🧠 判定盤面", key="cv_btn", use_container_width=True)
+    _cv_multi = st.checkbox("🔭 三時框一次看（4h 定方向 / 1h、15m 找進場）", key="cv_multi")
     if _cv_go:
         with st.spinner("抓 K 線 + CNN 判定中…"):
             try:
@@ -2704,18 +2705,34 @@ with _tab6:
                 _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "research"))
                 import cv_predict as _cvp
                 _il.reload(_cvp)
-                st.session_state.cv_result = _cvp.classify(_cv_sym, _cv_tf)
+                if _cv_multi:
+                    st.session_state.cv_result = {"multi": [_cvp.classify(_cv_sym, _t) for _t in ["4h", "1h", "15m"]]}
+                else:
+                    st.session_state.cv_result = _cvp.classify(_cv_sym, _cv_tf)
             except Exception as _e:
                 st.session_state.cv_result = {"error": str(_e)}
     _cvr = st.session_state.get("cv_result")
+    _twm = {"down": "📉 下降趨勢", "range": "🟰 盤整/震盪", "up": "📈 上升趨勢"}
     if _cvr and "error" in _cvr:
         st.error(f"CNN 判定失敗：{_cvr['error']}")
+    elif _cvr and "multi" in _cvr:
+        _ms = _cvr["multi"]
+        st.caption("🔭 三時框：**4h 看方向、1h/15m 找進場**。三個一致→訊號較強；打架→觀望或以 4h 為主。")
+        for _m in _ms:
+            st.image(_m["chart_bytes"],
+                     caption=f"{_m['symbol']} {_m['tf']}：{_m['label_tw']}（{_m['conf']*100:.0f}%）",
+                     width="stretch")
+        _dirs = [_m["cls"] for _m in _ms]
+        if len(set(_dirs)) == 1:
+            st.success(f"✅ 三時框一致：{_ms[0]['label_tw']} → {_ms[0]['setup']}")
+        else:
+            _txt = " ｜ ".join(_m["tf"] + " " + _m["label_tw"] for _m in _ms)
+            st.warning(f"⚠ 時框分歧：{_txt} → 觀望，或以 4h 方向為主、等 1h/15m 回到同向再進")
     elif _cvr:
         if _cvr.get("chart_bytes"):
             st.image(_cvr["chart_bytes"],
                      caption=f"{_cvr['symbol']} {_cvr['tf']} 最近 {_cvr['n']} 根（模型判斷的這段；你也對照看看像不像）",
                      width="stretch")
-        _twm = {"down": "📉 下降趨勢", "range": "🟰 盤整/震盪", "up": "📈 上升趨勢"}
         for _c in ["up", "range", "down"]:
             _p = _cvr["probs"][_c]
             _ca, _cb = st.columns([1, 4])

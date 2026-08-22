@@ -2695,7 +2695,8 @@ with _tab6:
     _cv_sym = _cvc1.selectbox("市場", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
                                        "XRP/USDT", "DOGE/USDT", "ADA/USDT", "AVAX/USDT"], key="cv_sym")
     _cv_tf = _cvc2.selectbox("時框", ["1h", "4h", "15m"], key="cv_tf")
-    _cv_go = _cvc3.button("🧠 判定盤面", key="cv_btn")
+    _cvc3.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)  # 對齊下拉選單
+    _cv_go = _cvc3.button("🧠 判定盤面", key="cv_btn", use_container_width=True)
     if _cv_go:
         with st.spinner("抓 K 線 + CNN 判定中…"):
             try:
@@ -3106,7 +3107,8 @@ with _tab10:
     _ka, _kb, _kc = st.columns([2, 1, 1])
     _look_sym = _ka.selectbox("市場", _PM_COINS, key="pm_look_sym")
     _look_tf = _kb.selectbox("時框", ["1h", "4h", "15m"], key="pm_look_tf")
-    if _kc.button("🔍 看盤 + 帶入", key="pm_look_btn"):
+    _kc.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)  # 對齊下拉選單
+    if _kc.button("🔍 看盤 + 帶入", key="pm_look_btn", use_container_width=True):
         with st.spinner("抓 K 線 + CNN 判定中…"):
             try:
                 import sys as _sys, importlib as _il

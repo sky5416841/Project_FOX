@@ -33,7 +33,7 @@ FEE = 0.0005          # 單邊 taker ~0.05%
 
 # ----------------------------------------------------------------- 帳本
 def _default():
-    return {"equity": START_EQUITY, "open": [], "next_id": 1,
+    return {"equity": START_EQUITY, "open": [], "pending": [], "next_id": 1,
             "closed_count": 0, "realized_pnl": 0.0, "fees_paid": 0.0}
 
 
@@ -41,10 +41,38 @@ def load_state():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, encoding="utf-8") as f:
-                return json.load(f)
+                s = json.load(f)
+            s.setdefault("pending", [])        # 舊帳本相容:補上限價單佇列
+            s.setdefault("open", [])
+            return s
         except (json.JSONDecodeError, ValueError):
             print("  [WARN] 帳本毀損 → 用預設重啟")
     return _default()
+
+
+# 跨行程互斥鎖:網頁 fragment 與背景監控可能同時改帳本 → 用 lockfile 防 race。
+class _FileLock:
+    def __init__(self, path=STATE_FILE + ".lock", timeout=8.0):
+        self.path, self.timeout, self.fd = path, timeout, None
+
+    def __enter__(self):
+        deadline = time.time() + self.timeout
+        while True:
+            try:
+                self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                return self
+            except FileExistsError:
+                if time.time() > deadline:      # 逾時:視為死鎖殘留,強制奪鎖
+                    try: os.remove(self.path)
+                    except OSError: pass
+                    continue
+                time.sleep(0.15)
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            os.close(self.fd)
+        try: os.remove(self.path)
+        except OSError: pass
 
 
 def save_state(s):
@@ -168,6 +196,74 @@ def open_position(state, ex, symbol, side, leverage, sl, tp, risk_pct=1.0):
     print(f"  ✅ 已開倉 #{pos['id']} {symbol} {side} @ {entry:g}"
           f"（名目 ${r['notional']:.0f}，開倉費 ${pos['open_fee']:.2f} 於平倉時計入）")
     return pos
+
+
+# ----------------------------------------------------------------- 限價掛單
+def add_pending(state, symbol, side, entry, leverage, sl, tp, risk_pct=1.0,
+                price_now=None):
+    """掛一張限價單(不立即成交)。先用限價當進場價跑一次護欄,擋掉爛單。
+    price_now 決定觸發方向:限價在現價下方=回踩買/現價上方=突破買,自動判斷。
+    回傳 (pending_dict, None) 或 (None, 錯誤訊息)。"""
+    symbol = _norm(symbol)
+    r = rs.compute(state["equity"], risk_pct, side, entry, sl, tp, leverage)
+    if r is None:
+        return None, "停損距離為 0，無法掛單。"
+    # 護欄:停損要在爆倉之前(正常插針爆不到),否則這單本質是爆倉單,拒絕
+    liq = r["liq"]
+    if side == "long" and sl <= liq:
+        return None, f"停損 {sl:g} 在爆倉價 {liq:g} 之後 → 會先爆倉,拒絕(降槓桿或收緊停損)。"
+    if side == "short" and sl >= liq:
+        return None, f"停損 {sl:g} 在爆倉價 {liq:g} 之後 → 會先爆倉,拒絕(降槓桿或收緊停損)。"
+    if price_now is None:
+        price_now = entry
+    _rr = r.get("rr")
+    p = {"id": state["next_id"], "symbol": symbol, "side": side,
+         "entry": round(entry, 6), "leverage": leverage,
+         "sl": round(sl, 6), "tp": round(tp, 6), "risk_pct": risk_pct,
+         "arm_above": entry >= price_now,       # True=價漲到才觸發;False=價跌到才觸發
+         "rr": round(_rr, 3) if _rr else "",
+         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    state["next_id"] += 1
+    state["pending"].append(p)
+    save_state(state)
+    return p, None
+
+
+def check_pending(state, ex, verbose=True):
+    """抓即時價,把觸發的限價單轉成實際持倉(用限價當進場價,依當下權益重算部位)。
+    回傳被成交的清單。網頁 fragment 與背景監控都會呼叫。"""
+    still, filled = [], []
+    for p in state.get("pending", []):
+        try:
+            px = live_price(ex, p["symbol"])
+        except Exception:
+            still.append(p); continue
+        hit = (px >= p["entry"]) if p.get("arm_above") else (px <= p["entry"])
+        if not hit:
+            still.append(p); continue
+        r = rs.compute(state["equity"], p["risk_pct"], p["side"],
+                       p["entry"], p["sl"], p["tp"], p["leverage"])
+        if r is None:
+            still.append(p); continue          # 理論上不會,保底
+        pos = add_position(state, p["symbol"], p["side"], p["entry"],
+                           p["leverage"], p["sl"], p["tp"], r)
+        filled.append(pos)
+        if verbose:
+            print(f"  🎯 限價單 #{p['id']} 觸發成交 → 持倉 #{pos['id']} "
+                  f"{p['symbol']} {p['side']} @ {p['entry']:g}")
+    state["pending"] = still
+    if filled:
+        save_state(state)
+    return filled
+
+
+def cancel_pending(state, pid):
+    before = len(state.get("pending", []))
+    state["pending"] = [p for p in state.get("pending", []) if p["id"] != pid]
+    if len(state["pending"]) < before:
+        save_state(state)
+        return True
+    return False
 
 
 def close_manual(state, ex, pid):

@@ -34,7 +34,7 @@ import live_logger as mllog
 MARKETS      = [(s, tf) for s in ["BTC/USDT", "ETH/USDT", "SOL/USDT", "ADA/USDT",
                                   "BNB/USDT", "XRP/USDT", "DOGE/USDT", "AVAX/USDT",
                                   "LINK/USDT", "LTC/USDT", "DOT/USDT", "TRX/USDT"]
-                for tf in ["5m", "15m"]]   # 12幣×2時框=24市場,擴大孵化吞吐(不動特徵邏輯→不漂移)
+                for tf in ["5m", "15m", "30m", "1h"]]   # 12幣×4時框=48市場(2026/8加30m/1h驗高時框是否勝過手續費;僅改清單→不動特徵→不漂移)
 START_EQUITY = 10_000.0
 RISK_PCT     = 0.01      # 每筆風險 = 權益 × 1%(打到 SL 約虧 1R)
 LEVERAGE     = 5         # 僅影響保證金占用顯示;盈虧由 qty×價差決定

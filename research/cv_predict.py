@@ -20,6 +20,7 @@ import sys
 import tempfile
 
 import ccxt
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
@@ -40,12 +41,28 @@ SETUP = {
 }
 
 
+_MODEL_CACHE = {}
+
+
 def load_model(path=None):
+    """載入模型(依路徑快取,避免每次判斷都重讀硬碟)。"""
     path = path or os.path.join(ROOT, "cv_model.pt")
-    m = SmallCNN(len(CLASSES))
-    m.load_state_dict(torch.load(path, map_location="cpu"))
-    m.eval()
-    return m
+    if path not in _MODEL_CACHE:
+        m = SmallCNN(len(CLASSES))
+        m.load_state_dict(torch.load(path, map_location="cpu"))
+        m.eval()
+        _MODEL_CACHE[path] = m
+    return _MODEL_CACHE[path]
+
+
+def _model_path_for_tf(tf):
+    """驗證發現:cv_model.pt 是拿 1h 訓練的,套到 4h 準確率會從85%崩到53%(幾乎塌縮成猜range)。
+    改用專門拿 4h 資料訓練的 cv_model_4h.pt(LOSO-CV 87%)。15m/1h 維持用原模型(驗證過84~85%,沒明顯掉)。"""
+    if tf == "4h":
+        p4h = os.path.join(ROOT, "cv_model_4h.pt")
+        if os.path.exists(p4h):
+            return p4h
+    return os.path.join(ROOT, "cv_model.pt")
 
 
 def fetch_last(symbol, tf, n):
@@ -67,8 +84,47 @@ def _pfmt(x):
     return f"{x:.6f}"
 
 
+ER_TREND, ER_CHOP = 0.45, 0.30      # >0.45=趨勢可騎 / <0.30=絞肉別做
+
+
+def _efficiency_ratio(d, n=30):
+    """效率比率 = |淨移動| / Σ|每根變動|(0~1)。高=走得直(趨勢)、低=來回鋸(絞肉)。"""
+    c = d["close"].tail(n).to_numpy(dtype=float)
+    if len(c) < 3:
+        return 0.0
+    path = float(np.abs(np.diff(c)).sum())
+    return float(abs(c[-1] - c[0]) / path) if path else 0.0
+
+
+def _two_lights(cls, er):
+    """把『方向(燈1)+ ER 品質(燈2)』合成一句可操作判定。回傳 dict。"""
+    # 燈1:方向
+    if cls == "up":
+        l1 = "🟢 做多"
+    elif cls == "down":
+        l1 = "🟢 做空"
+    else:
+        l1 = "⚪ 無方向(震盪)"
+    # 燈2:ER 品質
+    if er >= ER_TREND:
+        l2, l2ok = f"🟢 有趨勢可騎(ER {er:.2f})", True
+    elif er <= ER_CHOP:
+        l2, l2ok = f"🔴 絞肉盤(ER {er:.2f})", False
+    else:
+        l2, l2ok = f"🟡 中性(ER {er:.2f})", False
+    # 綜合(只針對趨勢單 Setup C)
+    if cls in ("up", "down"):
+        if l2ok:
+            verdict = "✅ 兩燈綠 → 可順勢做(回踩+確認再進)"
+        else:
+            verdict = "⏸ 方向對但無趨勢可騎 → 空手等(絞肉盤做趨勢單=送錢)"
+    else:
+        verdict = "震盪盤 → 打 Setup A 區間(非趨勢單);ER 低是正常的"
+    return {"er": round(er, 3), "light1": l1, "light2": l2, "tradeable": l2ok, "verdict": verdict}
+
+
 def _calc_levels(d, cls):
-    """統一算 Setup 價位(圖與模擬倉共用,確保一致)。趨勢停損=EMA±1.5ATR(不用整段起漲低點)。"""
+    """統一算 Setup 價位(圖與模擬倉共用,確保一致)。趨勢停損=最近20根擺動低/高點外側(結構停損,不被正常回踩掃出),至少留0.5ATR緩衝。"""
     last = float(d["close"].iloc[-1])
     atr = float((d["high"] - d["low"]).tail(14).mean()) or last * 0.01
     if cls in ("range", None):
@@ -77,16 +133,21 @@ def _calc_levels(d, cls):
         extra = {"support": lo, "resistance": hi, "width_pct": (hi - lo) / last * 100}
     elif cls == "up":
         ema = float(d["close"].ewm(span=20, adjust=False).mean().iloc[-1])
-        entry, sl, tp, side = ema, ema - 1.5 * atr, float(d["high"].max()), "long"
+        swing_low = float(d["low"].tail(20).min())           # 最近擺動低點=結構支撐
+        # 停損放支撐下方(正常回踩測支撐不會掃到你);至少留 0.5 ATR 緩衝避免太貼
+        sl = min(swing_low * (1 - 0.0015), ema - 0.5 * atr)
+        entry, tp, side = ema, float(d["high"].max()), "long"
         if tp <= entry:
             tp = entry + 2 * (entry - sl)
-        extra = {"ema": ema}
+        extra = {"ema": ema, "swing": swing_low}
     else:  # down
         ema = float(d["close"].ewm(span=20, adjust=False).mean().iloc[-1])
-        entry, sl, tp, side = ema, ema + 1.5 * atr, float(d["low"].min()), "short"
+        swing_high = float(d["high"].tail(20).max())         # 最近擺動高點=結構壓力
+        sl = max(swing_high * (1 + 0.0015), ema + 0.5 * atr) # 停損放壓力上方
+        entry, tp, side = ema, float(d["low"].min()), "short"
         if tp >= entry:
             tp = entry - 2 * (sl - entry)
-        extra = {"ema": ema}
+        extra = {"ema": ema, "swing": swing_high}
     rr = abs(tp - entry) / abs(entry - sl) if abs(entry - sl) > 0 else 0
     return dict(side=side, entry=entry, sl=sl, tp=tp, rr=rr, last=last, **extra)
 
@@ -125,7 +186,7 @@ def render_readable(df, cls=None):
         (lv["sl"],    f"停損 {_pfmt(lv['sl'])}",            "#ef5350", ":"),
     ]:
         ax.axhline(y, color=c, linestyle=ls, linewidth=1.1, alpha=0.9, zorder=2)
-        ax.text(n * 0.005, y, f" {txt}", color=c, fontsize=8, va="bottom", zorder=5)
+        ax.text(n * 0.005, y, f" {txt}", color=c, fontsize=9, va="bottom", zorder=5)
 
     if _range:
         lo, hi, wpct = lv["support"], lv["resistance"], lv["width_pct"]
@@ -144,19 +205,39 @@ def render_readable(df, cls=None):
         info = f"區間寬度 {wpct:.1f}% | {warn} | Setup A R:R約{lv['rr']:.1f}\n{state}"
     else:
         up = (cls == "up")
-        if (up and last > lv["entry"]) or ((not up) and last < lv["entry"]):
+        # 破位優先判斷:價格已穿過停損 → 趨勢轉弱/轉強,別再喊「可考慮進」(修落後樣板)
+        broke = (last < lv["sl"]) if up else (last > lv["sl"])
+        not_back = (last > lv["entry"]) if up else (last < lv["entry"])
+        if broke:
+            _turn = "趨勢轉弱" if up else "趨勢轉強"
+            _reclaim = "等重新站上 EMA" if up else "等重新跌回 EMA"
+            note = f"已跌破停損 {_pfmt(lv['sl'])} → 破位／{_turn}，別進（{_reclaim}再看）"
+            info_color = "#ef5350"
+        elif not_back:
             note = f"現價 {_pfmt(last)} 還沒回到 EMA → 等回調到 {_pfmt(lv['entry'])} 才進，別追"
+            info_color = "#80cbc4"
         else:
-            note = "已回調到 EMA 附近 → 出現順勢確認 K 可考慮進"
+            note = "回調到 EMA 附近（停損上方）→ 等順勢確認 K 再進，別接刀"
+            info_color = "#66bb6a"
         info = f"趨勢盤（Setup C {'做多' if up else '做空'}）  R:R 約 {lv['rr']:.1f}\n{note}"
-        info_color = "#80cbc4"
+
+    # 燈2:ER 趨勢品質(趨勢單才在意;震盪盤 ER 低是正常,不加擾)。圖上不用 emoji(字體無彩色glyph→豆腐),顏色已由 info_color 表達
+    _er = _efficiency_ratio(df)
+    if cls in ("up", "down"):
+        if _er >= ER_TREND:
+            info += f"\n燈2｜ER {_er:.2f} 有趨勢可騎 → 可做"
+        elif _er <= ER_CHOP:
+            info += f"\n燈2｜ER {_er:.2f} 絞肉盤 → 空手(趨勢單會被磨死)"
+            info_color = "#ef5350"
+        else:
+            info += f"\n燈2｜ER {_er:.2f} 中性 → 觀望"
 
     # 最新價
     ax.axhline(last, color="#eceff1", linewidth=0.6, alpha=0.4, zorder=2)
-    ax.text(n - 1, last, f" {_pfmt(last)}", color="#eceff1", fontsize=8, va="center", zorder=5)
+    ax.text(n - 1, last, f" {_pfmt(last)}", color="#eceff1", fontsize=9, va="center", zorder=5)
 
     ax.text(0.99, 0.02, info, transform=ax.transAxes, ha="right", va="bottom",
-            fontsize=8, color=info_color,
+            fontsize=10, color=info_color,
             bbox=dict(boxstyle="round", fc="#1a1f28", ec="#37474f", alpha=0.9), zorder=6)
 
     title = {"up": "上升趨勢", "down": "下降趨勢", "range": "盤整／震盪"}.get(cls, "")
@@ -184,12 +265,14 @@ def classify(symbol, tf):
     render(df, tmp)
     x = TF(datasets.folder.default_loader(tmp)).unsqueeze(0)
     with torch.no_grad():
-        prob = F.softmax(load_model()(x), dim=1)[0]
+        prob = F.softmax(load_model(_model_path_for_tf(tf))(x), dim=1)[0]
     probs = {c: float(prob[i]) for i, c in enumerate(CLASSES)}
     cls = max(probs, key=probs.get)
+    lights = _two_lights(cls, _efficiency_ratio(df))
     return {"symbol": symbol, "tf": tf, "n": WINDOW, "probs": probs,
             "cls": cls, "conf": probs[cls], "label_tw": TW[cls], "setup": SETUP[cls],
-            "chart_bytes": render_readable(df, cls), "levels": _levels(df, cls)}
+            "chart_bytes": render_readable(df, cls), "levels": _levels(df, cls),
+            "lights": lights}
 
 
 def _levels(df, cls):

@@ -2731,6 +2731,14 @@ with _tab6:
             st.warning(f"⚠ 時框分歧：{_txt}。分歧＝低品質盤，最乾淨是【觀望】。"
                        f"真要做，只做與大週期(4h)同向的那半、絕不逆勢。"
                        f"⚠ 別把「等時框共振再進」當進場訊號——共振無 edge(n_align 已證)。")
+        # 🚦 燈2:各時框 ER 趨勢品質(>0.45才有趨勢可騎、<0.30絞肉)
+        if all(_m.get("lights") for _m in _ms):
+            def _erdot(l):
+                return "🟢" if l["tradeable"] else ("🔴" if l["er"] <= 0.30 else "🟡")
+            _erline = " ｜ ".join(f"{_m['tf']} ER {_m['lights']['er']:.2f}{_erdot(_m['lights'])}" for _m in _ms)
+            _anytrend = any(_m["lights"]["tradeable"] for _m in _ms)
+            st.caption(f"🚦 燈2 趨勢品質：{_erline}　（ER>0.45🟢有趨勢可騎 / <0.30🔴絞肉盤）"
+                       + ("" if _anytrend else "　→ 全非趨勢＝絞肉盤，趨勢單空手等，別硬做"))
     elif _cvr:
         if _cvr.get("chart_bytes"):
             st.image(_cvr["chart_bytes"],
@@ -2747,6 +2755,10 @@ with _tab6:
         else:
             st.success(f"判定：{_cvr['label_tw']}（信心 {_cvr['conf']*100:.0f}%，{_cvr['symbol']} {_cvr['tf']}）")
         st.info(f"→ 建議 setup：{_cvr['setup']}")
+        _lg = _cvr.get("lights")
+        if _lg:
+            st.markdown(f"**🚦 兩燈判定**　燈1 {_lg['light1']}　｜　燈2 {_lg['light2']}")
+            (st.success if _lg["tradeable"] else st.warning)(_lg["verdict"])
     st.divider()
 
     if st.button("🩺 執行市場體檢", key="health_btn"):
@@ -2961,6 +2973,7 @@ with _tab9:
 
     # ── 記一筆（表單）────────────────────────────────────────────
     st.markdown("##### ✍️ 記一筆交易（勾選=有守住該條）")
+    st.caption("⚠ 預設全部**不勾**——請只勾「這筆你真的守住」的規則。守規矩要主動確認，不是預設清白（對自己蓋橡皮圖章＝毀掉紀律日誌的意義）。")
     with st.form("disc_log_form", clear_on_submit=True):
         _setup_type = st.selectbox("用哪個 Setup（對應 SETUP_PLAYBOOK）",
                                    list(_dj.SETUPS.keys()),
@@ -2970,7 +2983,7 @@ with _tab9:
         _cc = st.columns(2)
         for _i, (_rid, _desc) in enumerate(_dj.RULES):
             with _cc[_i % 2]:
-                _checks[_rid] = st.checkbox(f"[{_rid}] {_desc}", value=True, key=f"dj_{_rid}")
+                _checks[_rid] = st.checkbox(f"[{_rid}] {_desc}", value=False, key=f"dj_{_rid}")
         _pnl = st.text_input("這筆損益（R 或 USDT，只記錄、不算分，可留空）", placeholder="例：-1 或 +2.5")
         _note = st.text_input("備註（破了哪條、當下情緒…）")
         _submit = st.form_submit_button("記錄這筆")
@@ -3031,30 +3044,100 @@ with _tab9:
         st.dataframe(_show, width="stretch", hide_index=True)
 
 
+def _pm_candles_fig(_ex, symbol, tf, entry=None, sl=None, tp=None, side=None, limit=150):
+    """幣安風格互動K線圖(plotly):蠟燭 + 進場/停損/停利橫線 + 現價標記。用滑鼠可縮放拖曳。"""
+    raw = _ex.fetch_ohlcv(symbol, tf, limit=limit)
+    df = pd.DataFrame(raw, columns=["ts", "open", "high", "low", "close", "vol"])
+    df["dt"] = pd.to_datetime(df["ts"], unit="ms")
+    fig = go.Figure(data=[go.Candlestick(
+        x=df["dt"], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+        increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+        increasing_fillcolor="#26a69a", decreasing_fillcolor="#ef5350", name=symbol)])
+    last_px = float(df["close"].iloc[-1])
+    lines = [("進場", entry, "#42a5f5"), ("停損", sl, "#ef5350"), ("停利", tp, "#26a69a")]
+    for label, val, color in lines:
+        if val is None:
+            continue
+        fig.add_hline(y=val, line_dash="dash", line_color=color, line_width=1.3,
+                      annotation_text=f"{label} {val:g}", annotation_position="right",
+                      annotation_font_color=color)
+    # 現價用細黃線標示位置(不掛文字,避免跟進場/停損/停利標籤太近時互相疊字)；
+    # 文字改釘在圖表左上角固定位置(paper座標,永遠不會跟任何價位線重疊)。
+    fig.add_hline(y=last_px, line_color="#FFD54F", line_width=1, opacity=0.9)
+    fig.add_annotation(
+        text=f"現價 {last_px:g}", xref="paper", yref="paper", x=0.01, y=1.06,
+        showarrow=False, font=dict(color="#FFD54F", size=13), align="left")
+    fig.update_layout(
+        height=380, margin=dict(l=10, r=70, t=36, b=10),
+        xaxis_rangeslider_visible=False,
+        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
+        font_color="#c9d1d9",
+        yaxis=dict(gridcolor="#222831", side="right"),
+        xaxis=dict(gridcolor="#222831"),
+        showlegend=False,
+    )
+    return fig
+
+
 # ── Tab 10：手動模擬倉 ─────────────────────────────────────────────────────
 @st.fragment(run_every=10)
 def frag_manual_positions():
     """持倉/權益/歷史 每 10 秒自動刷新即時價(表單不放進來,免得輸入被重置)。"""
     import paper_manual as _pm
-    _pstate = _pm.load_state()
+    _auto, _filled = [], []
     try:
         _pex = engine_core.make_exchange()
-        _auto = _pm.settle(_pstate, _pex, verbose=False)   # 自動結算已觸發停損/停利/爆倉
-        _pm.save_state(_pstate)
+        with _pm._FileLock():                               # 與背景監控互斥,防搶寫帳本
+            _pstate = _pm.load_state()
+            _filled = _pm.check_pending(_pstate, _pex, verbose=False)  # 觸發的限價單→成交
+            _auto = _pm.settle(_pstate, _pex, verbose=False)          # 結算已觸發停損/停利/爆倉
+            _pm.save_state(_pstate)
+        for _c in _filled:
+            st.info(f"🎯 限價單成交 → 持倉 #{_c['id']} {_c['symbol']} {_c['side'].upper()} "
+                    f"@ {_c['entry']:g}。進場後別亂動，交給紀律。")
         for _c in _auto:
             st.warning(f"⚡ #{_c['id']} {_c['symbol']} {_c['reason']} 自動平倉 → "
                        f"{_c['net_pnl']:+.2f}（{_c['R']:+.2f}R）。記得去紀律日誌記一筆。")
     except Exception as _e:
         _pex = None
+        _pstate = _pm.load_state()
         st.error(f"抓幣安即時價失敗：{_e}")
 
     _eq = _pstate["equity"]
     _q1, _q2, _q3, _q4 = st.columns(4)
     _q1.metric("模擬倉權益", f"${_eq:,.2f}", f"{_eq - _pm.START_EQUITY:+,.2f}")
     _q2.metric("累計淨損益", f"{_pstate['realized_pnl']:+,.2f}")
-    _q3.metric("已平倉", f"{_pstate['closed_count']}")
-    _q4.metric("持倉中", f"{len(_pstate['open'])}")
-    st.caption("↻ 持倉即時價每 10 秒自動刷新（停損/停利/爆倉觸發會自動平倉）")
+    _q3.metric("持倉中", f"{len(_pstate['open'])}")
+    _q4.metric("掛單中", f"{len(_pstate.get('pending', []))}")
+    st.caption("↻ 持倉/掛單即時價每 10 秒自動刷新（限價觸發自動成交；停損/停利/爆倉觸發自動平倉）")
+
+    # ── 待成交限價單 ──────────────────────────────────────────────────────
+    _pend = _pstate.get("pending", [])
+    if _pend:
+        st.markdown("##### ⏳ 待成交限價單")
+        for _q in _pend:
+            _arm = "價漲觸發↑" if _q.get("arm_above") else "價跌觸發↓"
+            _pc, _pcb = st.columns([5, 1])
+            _pc.markdown(
+                f"**#{_q['id']} {_q['symbol']} {_q['side'].upper()} {_q['leverage']:g}x** ｜ "
+                f"進場 **{_q['entry']:g}**（{_arm}）｜ 停損 {_q['sl']:g} ｜ 停利 {_q['tp']:g} ｜ "
+                f"R:R {_q.get('rr','')} ｜ 風險 {_q['risk_pct']:g}%")
+            if _pcb.button("撤單", key=f"pm_cancel_{_q['id']}"):
+                with _pm._FileLock():
+                    _s2 = _pm.load_state()
+                    _pm.cancel_pending(_s2, _q["id"])
+                st.rerun()
+            if _pex is not None:
+                with st.expander(f"📈 #{_q['id']} K線圖(看回踩進度)"):
+                    _kt2 = st.radio("時框", ["15m", "1h", "4h"], index=1,
+                                   key=f"pm_pktf_{_q['id']}", horizontal=True)
+                    try:
+                        _fig2 = _pm_candles_fig(_pex, _q["symbol"], _kt2,
+                                                entry=_q["entry"], sl=_q["sl"], tp=_q["tp"])
+                        st.plotly_chart(_fig2, use_container_width=True,
+                                        key=f"pm_pchart_{_q['id']}_{_kt2}")
+                    except Exception as _ce2:
+                        st.caption(f"K線圖載入失敗：{_ce2}")
 
     st.markdown("##### 📌 當前持倉")
     if _pstate["open"] and _pex is not None:
@@ -3075,6 +3158,17 @@ def frag_manual_positions():
             if _cb.button("平倉", key=f"pm_close_{_p['id']}"):
                 _pm.close_manual(_pstate, _pex, _p["id"])
                 st.rerun()
+            with st.expander(f"📈 #{_p['id']} K線圖", expanded=True):
+                _kt = st.radio("時框", ["15m", "1h", "4h"], index=1,
+                              key=f"pm_ktf_{_p['id']}", horizontal=True)
+                try:
+                    _fig = _pm_candles_fig(_pex, _p["symbol"], _kt,
+                                           entry=_p["entry"], sl=_p["sl"], tp=_p["tp"],
+                                           side=_p["side"])
+                    st.plotly_chart(_fig, use_container_width=True,
+                                    key=f"pm_chart_{_p['id']}_{_kt}")
+                except Exception as _ce:
+                    st.caption(f"K線圖載入失敗：{_ce}")
     elif not _pstate["open"]:
         st.caption("目前無持倉。用下方表單開一筆（記得先想好停損停利）。")
 
@@ -3138,11 +3232,13 @@ with _tab10:
                 _res = _cvp.classify(_look_sym, _look_tf)
                 _lv = _res["levels"]
                 st.session_state.pm_look = {"chart": _res["chart_bytes"], "label": _res["label_tw"],
-                                            "conf": _res["conf"], "lv": _lv}
+                                            "conf": _res["conf"], "lv": _lv,
+                                            "lights": _res.get("lights")}
                 st.session_state.pm_sym = _look_sym
                 st.session_state.pm_fill_side = _lv["side"]
                 st.session_state.pm_fill_sl = float(_lv["sl"])
                 st.session_state.pm_fill_tp = float(_lv["tp"])
+                st.session_state.pm_fill_entry = float(_lv["entry"])
             except Exception as _e:
                 st.session_state.pm_look = {"error": str(_e)}
         st.rerun()
@@ -3155,6 +3251,13 @@ with _tab10:
         st.info(f"CNN：{_look['label']}（{_look['conf']*100:.0f}%）→ 建議 **{_lv['side'].upper()}**"
                 f"｜停損 {_lv['sl']:g}｜停利 {_lv['tp']:g}｜R:R {_lv['rr']}"
                 f"　✅ 已帶入下方表單，確認就按開倉（進場用市價）")
+        _lg = _look.get("lights")
+        if _lg:
+            st.markdown(f"**🚦 兩燈判定**　燈1 {_lg['light1']}　｜　燈2 {_lg['light2']}")
+            if _lg["tradeable"]:
+                st.success(f"{_lg['verdict']}")
+            else:
+                st.warning(f"{_lg['verdict']}")
 
     # ── 開倉（表單 + 護欄硬擋；停損停利已由上方帶入,可直接改）────
     st.markdown("##### ➕ 開一筆（會先過護欄；停損擋不住爆倉會被拒絕）")
@@ -3216,6 +3319,57 @@ with _tab10:
                         st.rerun()
             except Exception as _e:
                 st.error(f"開倉失敗：{_e}")
+
+    # ── 掛限價單（不用盯盤：照劇本掛好，價到自動成交）────────────────────
+    st.markdown("##### ⏳ 掛限價單（不用盯盤 · 價到自動成交）")
+    st.caption("照劇本先掛好進場價/停損/停利就能關掉走人。價格碰到進場價才成交（觸發方向自動判斷："
+               "掛在現價下方＝回踩買、上方＝突破買）。掛單先過護欄，停損擋不住爆倉會被拒絕。"
+               "⚠ 網頁開著時每 10 秒檢查；想關網頁也自動成交，需背景監控在跑。")
+    with st.form("pm_limit_form"):
+        _la, _lb, _lc, _ld = st.columns(4)
+        _lsym_def = st.session_state.get("pm_sym", "BTC/USDT")
+        _lsym = _la.selectbox("市場", _PM_COINS,
+                              index=_PM_COINS.index(_lsym_def) if _lsym_def in _PM_COINS else 0,
+                              key="pm_lim_sym")
+        _lsd = _lb.selectbox("方向", ["long", "short"],
+                             index=(1 if st.session_state.get("pm_fill_side") == "short" else 0),
+                             key="pm_lim_side")
+        _llev = _lc.number_input("槓桿", min_value=1.0, max_value=125.0, value=10.0, step=1.0,
+                                 key="pm_lim_lev")
+        _lrk = _ld.number_input("風險%", min_value=0.1, max_value=5.0, value=1.0, step=0.5,
+                                key="pm_lim_risk")
+        _le, _lf, _lg = st.columns(3)
+        _lentry = _le.number_input("進場價（限價）", min_value=0.0,
+                                   value=float(st.session_state.get("pm_fill_entry", 0.0)),
+                                   format="%.6f", key="pm_lim_entry")
+        _lsl = _lf.number_input("停損價", min_value=0.0,
+                                value=float(st.session_state.get("pm_fill_sl", 0.0)),
+                                format="%.6f", key="pm_lim_sl")
+        _ltp = _lg.number_input("停利價", min_value=0.0,
+                                value=float(st.session_state.get("pm_fill_tp", 0.0)),
+                                format="%.6f", key="pm_lim_tp")
+        _lgo = st.form_submit_button("掛限價單")
+    if _lgo:
+        if _lentry <= 0 or _lsl <= 0 or _ltp <= 0:
+            st.error("進場價、停損價、停利價都要填（限價單的意義就是三個價位先想好）。")
+        else:
+            try:
+                _pex2 = engine_core.make_exchange()
+                _pxnow = _pm.live_price(_pex2, _pm._norm(_lsym))
+            except Exception:
+                _pxnow = _lentry     # 抓不到現價就用進場價當基準判觸發方向
+            with _pm._FileLock():
+                _s3 = _pm.load_state()
+                _pd, _err = _pm.add_pending(_s3, _lsym, _lsd, _lentry, _llev, _lsl, _ltp,
+                                            _lrk, price_now=_pxnow)
+            if _err:
+                st.error(f"🚫 {_err}")
+            else:
+                _armtxt = "價漲到才觸發（突破買）" if _pd["arm_above"] else "價跌到才觸發（回踩買）"
+                st.success(f"✅ 已掛限價單 #{_pd['id']} {_lsym} {_lsd.upper()} @ {_lentry:g}"
+                           f"（{_armtxt}）｜停損 {_lsl:g} 停利 {_ltp:g} R:R {_pd.get('rr','')}。"
+                           f"價到會自動成交、記得回來記紀律日誌。")
+                st.rerun()
 
 
 # ── FOOTER（靜態，不參與刷新）─────────────────────────────────────────────

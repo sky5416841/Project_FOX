@@ -79,7 +79,7 @@ def load_client(testnet=False):
     # 通用類別的 load_markets 預設會一併查現貨/槓桿市場,只開期貨權限的金鑰會被擋(-2015)。
     ex = ccxt.binanceusdm({
         "apiKey": key, "secret": secret,
-        "options": {"fetchCurrencies": False},
+        "options": {"fetchCurrencies": False, "adjustForTimeDifference": True},
         "enableRateLimit": True,
         "timeout": 15000,
     })

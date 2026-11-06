@@ -158,6 +158,29 @@ def one_round(ex, dry=False):
 
 
 _last_tick = [time.time()]
+ALERT_AFTER = 5             # 連續幾輪失敗就發警示
+ALERT_FILE, HEARTBEAT = "demo_ALERT.txt", "demo_heartbeat.json"
+_fails = [0]
+
+
+def _note_round(ok, err=""):
+    """連續失敗達門檻 → 寫 ALERT 事件+警示檔(只在剛達標時寫一次);成功 → 清除警示、更新心跳。"""
+    if ok:
+        if _fails[0] >= ALERT_AFTER:
+            log_event("RECOVERED", "連續失敗 %d 輪後恢復" % _fails[0])
+        _fails[0] = 0
+        try:
+            if os.path.exists(ALERT_FILE): os.remove(ALERT_FILE)
+            json.dump({"ok_at": time.strftime("%Y-%m-%d %H:%M:%S")}, open(HEARTBEAT, "w"))
+        except Exception:
+            pass
+    else:
+        _fails[0] += 1
+        if _fails[0] == ALERT_AFTER:
+            msg = "demo_mirror 連續 %d 輪失敗(約%d分鐘沒在做事): %s" % (_fails[0], _fails[0] * LOOP_SEC // 60, err[:150])
+            log_event("ALERT", msg)
+            try: open(ALERT_FILE, "w", encoding="utf-8").write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg)
+            except Exception: pass
 
 
 def _hang_guard(limit=300):
@@ -187,7 +210,9 @@ def main():
         _last_tick[0] = time.time()
         try:
             one_round(ex, dry)
+            _note_round(True)
         except Exception as e:
+            _note_round(False, "%s: %s" % (type(e).__name__, re.sub(r"signature=\w+", "", str(e))[-150:]))
             log_event("ERROR", "%s: %s" % (type(e).__name__, re.sub(r"signature=\w+", "", str(e))[-220:]))
         if once:
             return

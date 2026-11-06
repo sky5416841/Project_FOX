@@ -13,6 +13,7 @@ TARGETS = [
     ("po3_bigtf_scan.py", ["--loop"]),
     ("setup_scan.py", ["--loop"]),
     ("demo_mirror.py", []),      # 幣安Demo(假錢)固定規則自動交易,見 HYPOTHESES.md H3
+    ("signal_radar.py", []),     # 進場參謀雷達:只通知(Discord/radar_alerts.csv),不下單
 ]
 
 def _snapshot():

@@ -74,7 +74,7 @@ def sizing_text(side, entry, sl, tp):
                "停損先於爆倉 ✅" if ok else "⚠ 停損不先於爆倉，別進"))
 
 
-def send(kind, sym, text, row, state, dry):
+def send(kind, sym, text, row, state, dry, push=True):
     key = "%s|%s" % (kind, sym)
     last = state.get(key)
     if last and (time.time() - last) < COOLDOWN_H[kind] * 3600 and not dry:
@@ -90,7 +90,7 @@ def send(kind, sym, text, row, state, dry):
         w.writerow([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sym, kind] + row)
     state[key] = time.time()
     json.dump(state, open(STATE, "w", encoding="utf-8"))
-    url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip() if push else ""
     tw = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime("%m/%d %H:%M")
     text = "🕒 %s（台灣時間）\n%s" % (tw, text)
     if url:
@@ -113,13 +113,24 @@ def setup_alert(kind, sym, side, lv, why):
     return text, [side, round(e, 6), round(s, 6), round(t, 6), round(rr, 2), why]
 
 
-def auto_open(kind, sym, side, lv, sig_open_ms):
+def _can_push():
+    """H9：模擬倉啟用時，只有『真的能開單』的訊號才推 Discord；被略過的只寫紀錄，避免洗版。"""
+    if os.environ.get("RADAR_AUTOTRADE") != "1":
+        return True
+    try:
+        import radar_autotrade as at
+        return at.can_open()
+    except Exception:
+        return True
+
+
+def auto_open(kind, sym, side, lv, sig_open_ms, sig_close=None):
     """H8 自建模擬倉（純模擬）。只有電腦端 .env 設 RADAR_AUTOTRADE=1 才啟用。"""
     if os.environ.get("RADAR_AUTOTRADE") != "1":
         return
     try:
         import radar_autotrade as at
-        at.on_signal(kind, sym, side, lv, sig_open_ms)
+        at.on_signal(kind, sym, side, lv, sig_open_ms, sig_close)
     except Exception as e:
         log("AUTOTRADE_ERR %s" % str(e)[:160])
 
@@ -138,15 +149,15 @@ def check_symbol(sym, ex_f, state, dry):
         if cl >= op and lo <= lv["entry"] * 1.002 and cl > lv["sl"] and lv["rr"] >= 1.5:
             text, row = setup_alert("LONG_PULLBACK", sym, "long", lv,
                                     "4h 上漲(%.0f%%)，15m 綠棒收在 EMA20 附近、守住支撐" % (r4["conf"] * 100))
-            if send("LONG_PULLBACK", sym, text, row, state, dry) and not dry:
-                auto_open("LONG_PULLBACK", sym, "long", lv, c[0])
+            if send("LONG_PULLBACK", sym, text, row, state, dry, push=_can_push()) and not dry:
+                auto_open("LONG_PULLBACK", sym, "long", lv, c[0], cl)
     elif r4["cls"] == "down":
         lv = cp._levels(df15, "down")
         if cl < op and hi >= lv["entry"] * 0.998 and cl < lv["sl"] and lv["sl"] > lv["entry"] > lv["tp"] and lv["rr"] >= 1.5:
             text, row = setup_alert("SHORT_BOUNCE", sym, "short", lv,
                                     "4h 下跌(%.0f%%)，15m 反彈碰到 EMA20 後收紅" % (r4["conf"] * 100))
-            if send("SHORT_BOUNCE", sym, text, row, state, dry) and not dry:
-                auto_open("SHORT_BOUNCE", sym, "short", lv, c[0])
+            if send("SHORT_BOUNCE", sym, text, row, state, dry, push=_can_push()) and not dry:
+                auto_open("SHORT_BOUNCE", sym, "short", lv, c[0], cl)
 
 
 def check_flush(sym, ex_s, state, dry):

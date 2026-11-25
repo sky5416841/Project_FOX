@@ -89,6 +89,13 @@ def advance(st, o, bar):
     if o["status"] == "PENDING":
         if ms - o["created_ms"] > TTL_MS:
             o.update(status="CANCELLED", exit_ms=ms, exit_why="24 小時未成交")
+        elif o["kind"] == "stop":                                    # 突破單：往上衝過才做多／往下跌破才做空
+            trig = o["trigger"]
+            if (h >= trig) if long else (l <= trig):
+                base = max(op, trig) if long else min(op, trig)      # 跳空越過掛單價就用開盤價
+                o.update(status="OPEN", fill_ms=ms, entry=round(base * ((1 + SLIP) if long else (1 - SLIP)), 4))
+                if (l <= o["sl"]) if long else (h >= o["sl"]):
+                    close_trade(st, o, ms, stop_px(o), "停損")
         elif (l <= o["entry"]) if long else (h >= o["entry"]):
             o.update(status="OPEN", fill_ms=ms)
             if (l <= o["sl"]) if long else (h >= o["sl"]):           # 成交那根只檢查停損
@@ -189,7 +196,7 @@ def add_order(st, player, sym, side, entry, sl, tp, risk, lev, reason, kind, cre
 def describe(o):
     s = "#%d %s %s %s｜%s %.2f｜停損 %.2f｜停利 %s｜風險 %g%%｜%gx｜名目 $%.0f" % (
         o["id"], NAME[o["player"]], o["symbol"], "做多" if o["side"] == "long" else "做空",
-        "市價" if o["kind"] == "market" else "限價", o["entry"], o["sl"],
+        {"market": "市價", "limit": "限價", "stop": "突破"}[o["kind"]], o["entry"], o["sl"],
         "-" if o["tp"] is None else "%.2f" % o["tp"], o["risk"], o["lev"], o["notional"])
     st_ = {"PENDING": "掛單中", "OPEN": "持倉中", "CLOSED": "已平倉", "CANCELLED": "已取消"}[o["status"]]
     s += "｜" + st_
@@ -229,7 +236,7 @@ def main():
     a.add_argument("player", choices=["user", "claude"]); a.add_argument("symbol", choices=list(SYMS))
     a.add_argument("side", choices=["long", "short"])
     a.add_argument("--sl", type=float, required=True); a.add_argument("--tp", type=float)
-    a.add_argument("--limit", type=float); a.add_argument("--risk", type=float, default=2.0)
+    a.add_argument("--limit", type=float); a.add_argument("--breakout", type=float); a.add_argument("--risk", type=float, default=2.0)
     a.add_argument("--lev", type=float); a.add_argument("--reason", required=True)
     c = sub.add_parser("close"); c.add_argument("id", type=int); c.add_argument("--reason", required=True)
     m = sub.add_parser("move"); m.add_argument("id", type=int); m.add_argument("--sl", type=float)
@@ -248,7 +255,15 @@ def main():
     t = now_ms()
     if args.cmd == "order":
         px = last_price(args.symbol)
-        if args.limit is not None:
+        trigger = None
+        if args.limit is not None and args.breakout is not None:
+            sys.exit("--limit 和 --breakout 只能擇一。")
+        if args.breakout is not None:
+            if (args.side == "long" and args.breakout <= px) or (args.side == "short" and args.breakout >= px):
+                sys.exit("突破單：做多要掛在現價 %.2f 上方，做空掛在下方。" % px)
+            trigger, kind = args.breakout, "stop"
+            entry = trigger * ((1 + SLIP) if args.side == "long" else (1 - SLIP))
+        elif args.limit is not None:
             if (args.side == "long" and args.limit >= px) or (args.side == "short" and args.limit <= px):
                 sys.exit("限價單要掛在比現價 %.2f 更好的價位；要立刻進場就不要給 --limit。" % px)
             entry, kind = args.limit, "limit"
@@ -257,6 +272,8 @@ def main():
         try:
             o = add_order(st, args.player, args.symbol, args.side, entry, args.sl, args.tp, args.risk, args.lev,
                           args.reason, kind, t)
+            if trigger is not None:
+                o["trigger"] = trigger
         except ValueError as e:
             sys.exit("拒絕：%s" % e)
         save(st); print("已記錄（%s）：%s" % (tw(t), describe(o))); return
